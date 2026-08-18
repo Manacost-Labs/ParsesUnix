@@ -1,0 +1,34 @@
+{
+  "total": 3,
+  "resolved": 0,
+  "coverage": 0.0,
+  "metrics": {
+    "verdicts": {
+      "SOFT_BLOCK": 2,
+      "DEAD_URL": 1
+    },
+    "by_level": {},
+    "fallbacks": 0,
+    "extractor_sources": {},
+    "quorum_conflicts": 0,
+    "fresh_unchanged": 0,
+    "cost_credits": "0",
+    "paid_calls": 0,
+    "per_domain": {
+      "hsreplay.net": 3
+    }
+  },
+  "unresolved_urls": [
+    "https://hsreplay.net/",
+    "https://hsreplay.net/decks/"
+  ],
+  "quarantined_urls": [
+    "https://hsreplay.net/definitely-not-a-real-page-xyz"
+  ],
+  "dead_zone_urls": [],
+  "promote": {
+    "ok": true,
+    "reason": "no changes to promote",
+    "staged": 0
+  }
+}

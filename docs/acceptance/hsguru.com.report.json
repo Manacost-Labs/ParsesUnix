@@ -1,0 +1,35 @@
+{
+  "total": 3,
+  "resolved": 0,
+  "coverage": 0.0,
+  "metrics": {
+    "verdicts": {
+      "SOFT_BLOCK": 1,
+      "AUTH_REQUIRED": 1,
+      "DEAD_URL": 1
+    },
+    "by_level": {},
+    "fallbacks": 0,
+    "extractor_sources": {},
+    "quorum_conflicts": 0,
+    "fresh_unchanged": 0,
+    "cost_credits": "0",
+    "paid_calls": 0,
+    "per_domain": {
+      "www.hsguru.com": 3
+    }
+  },
+  "unresolved_urls": [
+    "https://www.hsguru.com/",
+    "https://www.hsguru.com/leaderboard/player-stats"
+  ],
+  "quarantined_urls": [
+    "https://www.hsguru.com/definitely-not-a-real-page-xyz"
+  ],
+  "dead_zone_urls": [],
+  "promote": {
+    "ok": true,
+    "reason": "no changes to promote",
+    "staged": 0
+  }
+}

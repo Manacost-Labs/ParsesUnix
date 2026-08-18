@@ -1,0 +1,45 @@
+{
+  "site": "hs-manacost.ru",
+  "authorization": {
+    "public_data_only": true
+  },
+  "url_classes": {
+    "page": {
+      "match": "^https://hs-manacost\\.ru/",
+      "validation": {
+        "min_body_bytes": 500,
+        "canary": "manacost",
+        "required_fields": [
+          "title"
+        ]
+      },
+      "routes": {
+        "primary": {
+          "type": "direct_http",
+          "level": "L1"
+        }
+      },
+      "extractors": [
+        {
+          "kind": "json_ld"
+        },
+        {
+          "kind": "meta",
+          "fields": {
+            "title": "og:title"
+          }
+        },
+        {
+          "kind": "heuristic"
+        }
+      ],
+      "quorum_fields": [
+        "title"
+      ],
+      "retry": {
+        "max_attempts": 1,
+        "backoff_seconds": 0
+      }
+    }
+  }
+}

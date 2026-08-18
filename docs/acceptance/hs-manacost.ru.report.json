@@ -1,0 +1,41 @@
+{
+  "total": 3,
+  "resolved": 2,
+  "coverage": 0.6667,
+  "metrics": {
+    "verdicts": {
+      "OK": 2,
+      "DEAD_URL": 1
+    },
+    "by_level": {
+      "L1": 2
+    },
+    "fallbacks": 0,
+    "extractor_sources": {
+      "heuristic": 2
+    },
+    "quorum_conflicts": 0,
+    "fresh_unchanged": 0,
+    "cost_credits": "0",
+    "paid_calls": 0,
+    "per_domain": {
+      "hs-manacost.ru": 3
+    }
+  },
+  "unresolved_urls": [],
+  "quarantined_urls": [
+    "https://hs-manacost.ru/definitely-not-a-real-page-xyz"
+  ],
+  "dead_zone_urls": [],
+  "promote": {
+    "ok": true,
+    "reason": "validation passed",
+    "staged": 2,
+    "clean_before": 0,
+    "completeness": 1.0,
+    "null_rate": {
+      "title": 0.0
+    },
+    "conflicts": 0
+  }
+}
