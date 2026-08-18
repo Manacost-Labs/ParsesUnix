@@ -14,13 +14,19 @@ BLOCK_SIGNATURES = (
     "attention required! | cloudflare",
     "cf-chl-",
     "cf_chl_",
+    "/cdn-cgi/challenge-platform",
     "cloudflare ray id",
     "verify you are human",
     "checking your browser",
-    "captcha",
+    # Specific anti-bot vendor challenge markers. A bare "captcha" is deliberately
+    # NOT here: it matches legitimate markup (e.g. a theme's `tds_captcha` JS var),
+    # producing false SOFT_BLOCK verdicts on ordinary pages.
+    "g-recaptcha-response",
+    "hcaptcha.com/captcha",
+    "px-captcha",
+    "captcha-delivery.com",
     "perimeterx",
     "datadome",
-    "px-captcha",
 )
 
 ACCESS_DENIED_SIGNATURES = (

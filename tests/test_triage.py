@@ -86,5 +86,18 @@ class TriageTests(unittest.TestCase):
         self.assertEqual(result.verdict, Verdict.PROVIDER_ERROR)
 
 
+    def test_captcha_substring_in_markup_is_not_a_block(self) -> None:
+        # A theme JS var like tds_captcha="" must not read as an anti-bot block.
+        body = 'x' * 400 + '<script>var tds_captcha="";</script>'
+        result = classify_response(status=200, body=body,
+                                   headers={"Content-Type": "text/html"},
+                                   rules=ContentRules(min_body_bytes=200))
+        self.assertNotEqual(result.verdict, Verdict.SOFT_BLOCK)
+
+    def test_specific_captcha_vendor_marker_is_a_block(self) -> None:
+        body = 'blocked <script src="https://ct.captcha-delivery.com/c.js"></script>' + ' ' * 400
+        result = classify_response(status=200, body=body, headers={"Content-Type": "text/html"})
+        self.assertEqual(result.verdict, Verdict.SOFT_BLOCK)
+
 if __name__ == "__main__":
     unittest.main()
