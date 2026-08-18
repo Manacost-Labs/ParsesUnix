@@ -44,6 +44,14 @@ Build the cheapest reliable collection path that preserves data quality and repo
 - Cost optimization after stable operation: read `adaptive-routing.md`.
 - Any request involving credentials, internal URLs, personal data, or provider forwarding: read `security.md` before acting.
 
+## Installation
+
+The scripts import the `web_scraper` core package. In its home repository it is
+found automatically. Elsewhere, either install it (`pip install -e .` from the
+ParserUnix repository) or set `WEB_SCRAPER_SRC` to the repository's `src/`
+directory. Installing also exposes `ws-probe`, `ws-triage`, `ws-profile`, and
+`ws-budget` on the PATH.
+
 ## Bundled resources
 
 All scripts are thin CLI wrappers over the repository's importable core package (`src/web_scraper/`): contracts, triage, probe, profiles, budget, and the free Fetch Gateway (`web_scraper.fetchers.FetchGateway`: L0-L2 routes, session warmup/TTL, pacing with jitter and `Retry-After`, redacted snapshots, mandatory triage after every attempt, and no paid escalation without a `BLOCKED`/`SOFT_BLOCK` verdict) live there and are unit-tested against saved fixtures in `tests/fixtures/`.

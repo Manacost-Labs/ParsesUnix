@@ -1,0 +1,21 @@
+name: Staleness watchdog
+
+# Weekly hard check that provider docs (scrape.do / Firecrawl / Bright Data)
+# have been re-verified within 60 days. Runs on a schedule so it forces
+# attention on its own cadence instead of blocking day-to-day merges.
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  provider-freshness:
+    name: provider docs must be fresh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Fail if provider reference is stale (60 days)
+        run: python tools/check_provider_freshness.py --max-age-days 60

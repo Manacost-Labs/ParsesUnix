@@ -21,3 +21,19 @@ staging/
 !.env.example
 secrets/
 
+
+# macOS
+.DS_Store
+
+# Packaging / build artifacts
+*.egg-info/
+build/
+dist/
+
+# Coverage
+.coverage
+htmlcov/
+
+# CLI outputs
+*.probe.json
+draft-*.json

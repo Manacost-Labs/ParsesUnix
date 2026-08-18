@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Sequence
 
 
 class BudgetExceeded(RuntimeError):
@@ -159,7 +159,7 @@ class BudgetLedger:
         return Usage(selected_day, next_credits, next_money, len(rows) + 1)
 
 
-def main() -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", type=Path, required=True)
     parser.add_argument("--daily-credit-limit", required=True)
@@ -176,7 +176,7 @@ def main() -> int:
     status_parser = subparsers.add_parser("status")
     status_parser.add_argument("--provider")
     status_parser.add_argument("--day")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     ledger = BudgetLedger(
         args.db,

@@ -5,13 +5,39 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "web-scraper-core"
 version = "0.1.0"
-description = "Importable core of the web-scraper skill: contracts, triage, probe, profiles, budget"
+description = "Importable core of the web-scraper skill: contracts, triage, probe, profiles, budget, and the free Fetch Gateway (L0-L2)"
+readme = "README.md"
 requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Manacost Labs" }]
+keywords = ["web-scraping", "crawler", "triage", "cost-aware", "anti-bot"]
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+]
+
+[project.urls]
+Repository = "https://github.com/Manacost-Labs/ParsesUnix"
 
 [project.optional-dependencies]
+# PyYAML is genuinely optional: profiles fall back to the built-in yamlish loader.
 yaml = ["pyyaml>=6"]
+# Browser reconnaissance and the L2 dynamic renderer.
+# NOTE: also requires `playwright install chromium` after pip install.
 browser = ["playwright>=1.40"]
+# Scrapling transports (real L1 session / stealthy L2). Unpinned until the
+# live API is verified per references/providers-and-stacks.md.
 http = ["scrapling"]
+dev = ["mypy>=1.8", "ruff>=0.5"]
+
+[project.scripts]
+ws-probe = "web_scraper.probe.cli:main"
+ws-triage = "web_scraper.triage:main"
+ws-profile = "web_scraper.profiles.cli:main"
+ws-budget = "web_scraper.budget:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
