@@ -293,6 +293,16 @@ class QueueStore:
             )
             return cursor.rowcount
 
+    def attempts(self, *, limit: int = 5000) -> list[dict[str, Any]]:
+        """Recent attempt records, newest first (input for failure diagnosis)."""
+
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT url, verdict, level, reason, at FROM attempts_log ORDER BY at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def done_urls(self) -> list[str]:
         with closing(self._connect()) as conn:
             rows = conn.execute("SELECT url FROM urls WHERE status = 'DONE'").fetchall()

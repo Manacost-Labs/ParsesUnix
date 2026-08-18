@@ -14,8 +14,8 @@ unlocked only when a classifier has proven the free levels do not work.
 | Path | What it is |
 |---|---|
 | `src/web_scraper/` | The importable core: all logic lives here. |
-| `.agents/skills/web-scraper/` | The portable Agent Skill (SKILL.md, references, templates) and thin CLI wrappers over the core. |
-| `.claude/skills/web-scraper` | Symlink to the canonical skill (Claude Code picks it up here). |
+| `.agents/skills/` | Agent Skills: `web-scraper` (collect), `scraper-regression` (the site changed), `scraper-debugger` (the run is underperforming). |
+| `.claude/skills/` | Symlinks to the canonical skills (Claude Code picks them up here). |
 | `tests/` | `unittest` suite (standard library only) and saved-response fixtures. |
 | `docs/` | Implementation plan and research notes. |
 | `tools/` | Repo maintenance scripts (e.g. the provider-doc staleness check). |
@@ -71,6 +71,15 @@ ws-profile validate .agents/skills/web-scraper/assets/templates/site-profile.yam
 
 # Classify a saved response:
 ws-triage --status 200 --body-file page.html --canary '<article'
+
+# Run a scheduled crawl from a run config:
+ws-run run.json --report state/last-report.json
+
+# Did the site change under us? (exit 1 on a critical regression — gates CI)
+ws-regress --fixtures-dir tests/fixtures --profile profiles/example.yaml
+
+# Why is this run underperforming, and what is the correct remedy?
+ws-diagnose --state-dir state
 ```
 
 ## Tests

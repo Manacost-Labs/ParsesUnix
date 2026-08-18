@@ -45,6 +45,19 @@ Build the cheapest reliable collection path that preserves data quality and repo
 - Cost optimization after stable operation: read `adaptive-routing.md`.
 - Any request involving credentials, internal URLs, personal data, or provider forwarding: read `security.md` before acting.
 
+## Sibling skills
+
+This skill covers *collecting* data. Two neighbours cover what happens when
+collection degrades — hand off rather than re-deriving their logic:
+
+- **scraper-regression** — the site changed under us: lost fields, moved JSON
+  paths, SSR→CSR, extractor source drift. Tooling: `ws-regress`.
+- **scraper-debugger** — the run is underperforming: group failures by signature
+  and get the policy-correct remedy per group. Tooling: `ws-diagnose`.
+
+Rule of thumb: a `PARSE_FAIL` wall is a regression question; a `BLOCKED`/`5xx`
+wall is a debugger question.
+
 ## Installation
 
 The scripts import the `web_scraper` core package. In its home repository it is
