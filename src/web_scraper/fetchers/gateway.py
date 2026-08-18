@@ -4,13 +4,16 @@ Escalation policy (the load-bearing invariant of this module):
 
 - attempts start at the profile's primary route; routes at the same or a
   cheaper level are always allowed, in declared order;
-- only ``BLOCKED`` and ``SOFT_BLOCK`` unlock the next level, and never
-  above L2 — paid levels belong to provider adapters (stage 3);
+- only ``BLOCKED`` and ``SOFT_BLOCK`` unlock a higher level (up to L2, the
+  highest free level); cheapest-first ordering still tries any cheaper route
+  first — paid levels belong to provider adapters (stage 3);
 - ``DEAD_URL``, ``AUTH_REQUIRED``, and ``ACCESS_DENIED`` are terminal;
-- ``RATE_LIMITED`` (honoring ``Retry-After``) and ``ORIGIN_DOWN`` retry
-  the same route with bounded backoff and never raise the level;
-- ``PARSE_FAIL`` may try other same-or-cheaper routes and never raises
-  the level.
+- ``RATE_LIMITED`` (honoring ``Retry-After`` on every attempt) and
+  ``ORIGIN_DOWN`` retry the same route with bounded backoff and never raise
+  the level;
+- ``PARSE_FAIL`` and ``THIN_CONTENT`` may try other same-or-cheaper routes and
+  never raise the level;
+- a per-domain circuit breaker short-circuits a domain that keeps hard-failing.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from web_scraper.contracts import (
+    FREE_ESCALATION_VERDICTS,
     PAID_ESCALATION_VERDICTS,
     Attempt,
     ContentRules,
@@ -34,8 +38,10 @@ from web_scraper.contracts import (
     Verdict,
 )
 from web_scraper.fetchers.base import RawResponse, Transport, TransportUnavailable
+from web_scraper.fetchers.circuit import CircuitBreaker
 from web_scraper.fetchers.pacing import Pacer, parse_retry_after
 from web_scraper.fetchers.sessions import SessionPool
+from web_scraper.probe.safety import UnsafeTarget
 from web_scraper.fetchers.transports import (
     PlaywrightRenderTransport,
     ScraplingStealthyTransport,
@@ -160,18 +166,37 @@ class FetchGateway:
         transport_provider: TransportProvider | None = None,
         pacer: Pacer | None = None,
         snapshots: SnapshotStore | None = None,
+        breaker: CircuitBreaker | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.profile = profile
         self._provider = transport_provider or default_transport_provider()
         self._pacer = pacer or Pacer()
         self._snapshots = snapshots
+        self._breaker = breaker if breaker is not None else CircuitBreaker()
         self._clock = clock
 
     def fetch_url(self, url: str) -> GatewayOutcome:
         url_class = self.profile.class_for_url(url)
         if url_class is None:
             raise ValueError(f"no url class in profile {self.profile.site!r} matches {url!r}")
+
+        domain = urlsplit(url).netloc
+        if self._breaker.is_open(domain):
+            state = self._breaker.state(domain)
+            verdict = state.verdict or Verdict.ORIGIN_DOWN
+            attempt = Attempt(
+                url=url,
+                level=Level.L0,
+                verdict=verdict,
+                reason=f"circuit breaker open for {domain} after {state.consecutive} hard failures",
+            )
+            return GatewayOutcome(
+                result=Result(url=url, verdict=verdict, attempts=(attempt,)),
+                response=None,
+                skipped_routes=({"route": None, "reason": "circuit breaker open"},),
+                snapshot_paths=(),
+            )
 
         attempts: list[Attempt] = []
         skipped: list[dict] = []
@@ -181,7 +206,9 @@ class FetchGateway:
 
         plan = self._plan_routes(url_class, skipped)
         # The start level is set by the first route that actually executes;
-        # after that, only BLOCKED/SOFT_BLOCK verdicts may raise it.
+        # after that, only a BLOCKED/SOFT_BLOCK verdict may raise it — up to the
+        # highest free level. Cheapest-first ordering guarantees a cheaper route
+        # is still tried before an unlocked more expensive one.
         unlocked_rank: int | None = None
 
         for route in plan:
@@ -217,6 +244,13 @@ class FetchGateway:
             except TransportUnavailable as exc:
                 skipped.append({"route": route.to_dict(), "reason": str(exc)})
                 continue
+            except (UnsafeTarget, ValueError) as exc:
+                # A malformed or unsafe route URL must not crash the whole URL:
+                # record it and try the next route.
+                skipped.append(
+                    {"route": route.to_dict(), "reason": f"unsafe or invalid route URL: {exc}"}
+                )
+                continue
 
             unlocked_rank = max(unlocked_rank or 0, route.level.rank)
             final_verdict = triage.verdict
@@ -225,13 +259,21 @@ class FetchGateway:
                 break
             if triage.verdict in _TERMINAL_VERDICTS:
                 break
-            if triage.verdict in PAID_ESCALATION_VERDICTS:
-                unlocked_rank = max(unlocked_rank, min(route.level.rank + 1, MAX_FREE_RANK))
-            # RATE_LIMITED / ORIGIN_DOWN / PARSE_FAIL: continue without unlocking.
+            if triage.verdict in FREE_ESCALATION_VERDICTS:
+                # Unlock up to the highest free level; ordering still tries any
+                # cheaper route first, so this cannot skip a cheaper door.
+                unlocked_rank = MAX_FREE_RANK
+            # RATE_LIMITED / ORIGIN_DOWN / PARSE_FAIL / THIN_CONTENT:
+            # try same-or-cheaper routes without unlocking a higher level.
 
         if final_verdict is None:
-            final_verdict = Verdict.PARSE_FAIL
-            if not attempts:
+            # Every route was skipped (templates, unsafe URLs, unavailable
+            # transports). Preserve any real verdict already recorded rather than
+            # inventing a PARSE_FAIL that would lose an escalation signal.
+            if attempts:
+                final_verdict = attempts[-1].verdict
+            else:
+                final_verdict = Verdict.PARSE_FAIL
                 attempts.append(
                     Attempt(
                         url=url,
@@ -241,6 +283,7 @@ class FetchGateway:
                     )
                 )
 
+        self._breaker.record(domain, final_verdict)
         result = Result(url=url, verdict=final_verdict, attempts=tuple(attempts))
         return GatewayOutcome(
             result=result,
@@ -256,6 +299,7 @@ class FetchGateway:
             url_class.alternative_routes, key=lambda route: route.level.rank
         )
         plan: list[Route] = []
+        seen: set[tuple[str, str, str | None]] = set()
         for route in ordered:
             if route.level.is_paid:
                 skipped.append(
@@ -265,6 +309,11 @@ class FetchGateway:
                     }
                 )
                 continue
+            key = (route.type.value, route.level.value, route.url)
+            if key in seen:
+                skipped.append({"route": route.to_dict(), "reason": "duplicate route"})
+                continue
+            seen.add(key)
             plan.append(route)
         return plan
 
@@ -288,7 +337,14 @@ class FetchGateway:
         for attempt_no in range(1, max_attempts + 1):
             self._pacer.pause(domain)
             started = self._clock()
-            response = transport.fetch(target)
+            try:
+                response = transport.fetch(target)
+            except TransportUnavailable:
+                # If earlier attempts on this route already produced a verdict,
+                # keep it instead of discarding the route entirely.
+                if triage is not None:
+                    break
+                raise
             elapsed_ms = response.elapsed_ms
             if elapsed_ms is None:
                 elapsed_ms = int((self._clock() - started) * 1000)
@@ -321,10 +377,14 @@ class FetchGateway:
                 )
             )
 
-            if triage.verdict is Verdict.RATE_LIMITED and attempt_no < max_attempts:
+            if triage.verdict is Verdict.RATE_LIMITED:
+                # Honor Retry-After even on the terminal attempt, so moving to the
+                # next same-domain route does not immediately re-hit the target.
                 delay = parse_retry_after(response.headers)
                 self._pacer.backoff(delay if delay is not None else backoff_seconds)
-                continue
+                if attempt_no < max_attempts:
+                    continue
+                break
             if triage.verdict is Verdict.ORIGIN_DOWN and attempt_no < max_attempts:
                 self._pacer.backoff(backoff_seconds * attempt_no)
                 continue

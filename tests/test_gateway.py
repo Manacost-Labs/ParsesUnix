@@ -187,7 +187,9 @@ class GatewayNeverEscalatesTests(unittest.TestCase):
         outcome = gateway_for(profile, {"L1": l1, "L2": l2}, pacer).fetch_url(PAGE_URL)
         self.assertEqual(outcome.result.verdict, Verdict.RATE_LIMITED)
         self.assertEqual(len(outcome.result.attempts), 2)  # retry same route
-        self.assertEqual(pacer.backoffs, [30.0])  # Retry-After: 30 was honored
+        # Retry-After: 30 honored on both attempts, including the terminal one so
+        # the next same-domain route/URL does not immediately re-hit the target.
+        self.assertEqual(pacer.backoffs, [30.0, 30.0])
         self.assertEqual(l2.calls, [])
         skipped_reasons = " ".join(item["reason"] for item in outcome.skipped_routes)
         self.assertIn("escalation is not justified", skipped_reasons)
@@ -283,6 +285,82 @@ class GatewayEscalationTests(unittest.TestCase):
         self.assertEqual(outcome.result.attempts[0].level.value, "L1")
         reasons = " ".join(item["reason"] for item in outcome.skipped_routes)
         self.assertIn("unresolved placeholders", reasons)
+
+    def test_l0_block_reaches_l2_when_only_l2_alternative_exists(self) -> None:
+        # The regression the +1 rule caused: L0 BLOCKED must reach an L2
+        # alternative even with no L1 route between them.
+        profile = make_profile(
+            {"type": "json_api", "level": "L0", "url": API_URL},
+            [{"type": "dynamic", "level": "L2"}],
+        )
+        l0 = FakeTransport({API_URL: [fixture_response("blocked", API_URL)]})
+        l2 = FakeTransport({PAGE_URL: [fixture_response("success")]})
+        outcome = gateway_for(profile, {"L0": l0, "L2": l2}).fetch_url(PAGE_URL)
+        self.assertEqual(outcome.result.verdict, Verdict.OK)
+        self.assertEqual(
+            [(a.level.value, a.verdict.value) for a in outcome.result.attempts],
+            [("L0", "BLOCKED"), ("L2", "OK")],
+        )
+
+    def test_unsafe_route_url_is_skipped_not_crashed(self) -> None:
+        from web_scraper.probe.safety import UnsafeTarget
+
+        class RaisingTransport:
+            def fetch(self, url, *, headers=None):
+                raise UnsafeTarget("target resolves to a non-public address: 10.0.0.7")
+
+        profile = make_profile(
+            {"type": "json_api", "level": "L0", "url": "https://demo-news.example/api/x"},
+            [{"type": "direct_http", "level": "L1"}],
+        )
+        l1 = FakeTransport({PAGE_URL: [fixture_response("success")]})
+
+        def provider(route, url_class, url):
+            return RaisingTransport() if route.level.value == "L0" else l1
+
+        gw = FetchGateway(profile, transport_provider=provider, pacer=RecordingPacer())
+        outcome = gw.fetch_url(PAGE_URL)
+        self.assertEqual(outcome.result.verdict, Verdict.OK)  # fell through to L1
+        reasons = " ".join(s["reason"] for s in outcome.skipped_routes)
+        self.assertIn("unsafe or invalid route URL", reasons)
+
+    def test_duplicate_route_is_attempted_once(self) -> None:
+        profile = make_profile(
+            {"type": "direct_http", "level": "L1"},
+            [{"type": "direct_http", "level": "L1"}],  # identical duplicate
+        )
+        l1 = FakeTransport({PAGE_URL: [fixture_response("redesigned")]})
+        outcome = gateway_for(profile, {"L1": l1}).fetch_url(PAGE_URL)
+        # PARSE_FAIL does not retry, so the deduped single route yields one
+        # attempt; the duplicate is reported as skipped rather than re-run.
+        self.assertEqual(len(outcome.result.attempts), 1)
+        self.assertIn("duplicate route", " ".join(s["reason"] for s in outcome.skipped_routes))
+
+    def test_circuit_breaker_opens_after_repeated_hard_failures(self) -> None:
+        from web_scraper.fetchers.circuit import CircuitBreaker
+
+        profile = make_profile({"type": "direct_http", "level": "L1", "url": None},
+                               retry={"max_attempts": 1, "backoff_seconds": 0})
+        breaker = CircuitBreaker(threshold=2)
+
+        def gw():
+            l1 = FakeTransport({PAGE_URL: [fixture_response("blocked")]})
+            return FetchGateway(
+                profile, transport_provider=lambda r, c, u: l1, pacer=RecordingPacer(), breaker=breaker
+            )
+
+        gw().fetch_url(PAGE_URL)  # 1st hard failure
+        gw().fetch_url(PAGE_URL)  # 2nd -> opens
+        self.assertTrue(breaker.is_open("demo-news.example"))
+        # Third call is short-circuited without touching the transport.
+        blocked_transport = FakeTransport({PAGE_URL: [fixture_response("success")]})
+        gw3 = FetchGateway(
+            profile, transport_provider=lambda r, c, u: blocked_transport,
+            pacer=RecordingPacer(), breaker=breaker,
+        )
+        outcome = gw3.fetch_url(PAGE_URL)
+        self.assertEqual(blocked_transport.calls, [])  # not called
+        self.assertIn("circuit breaker open", " ".join(s["reason"] for s in outcome.skipped_routes))
 
     def test_no_url_class_match_is_an_explicit_error(self) -> None:
         profile = make_profile({"type": "direct_http", "level": "L1"})
