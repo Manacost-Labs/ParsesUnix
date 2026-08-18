@@ -1,0 +1,9 @@
+{
+  "name": "soft-block",
+  "url": "https://demo-news.example/articles/solar-farm-riverton",
+  "status": 200,
+  "headers": {"Content-Type": "text/html; charset=utf-8"},
+  "body_file": "body.html",
+  "rules": {"min_body_bytes": 200, "canary": "<article", "expected_content_type": "html"},
+  "expected": {"verdict": "SOFT_BLOCK", "paid_escalation_allowed": true}
+}

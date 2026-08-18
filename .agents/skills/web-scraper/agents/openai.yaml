@@ -1,0 +1,4 @@
+interface:
+  display_name: "Web Scraper"
+  short_description: "Надёжный и экономный парсинг веб-страниц"
+  default_prompt: "Use $web-scraper to design and verify a reliable scraper for these pages."

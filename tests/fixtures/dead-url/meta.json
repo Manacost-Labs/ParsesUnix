@@ -1,0 +1,9 @@
+{
+  "name": "dead-url",
+  "url": "https://demo-news.example/articles/deleted-story",
+  "status": 404,
+  "headers": {"Content-Type": "text/html; charset=utf-8"},
+  "body_file": "body.html",
+  "rules": {"min_body_bytes": 200},
+  "expected": {"verdict": "DEAD_URL", "paid_escalation_allowed": false}
+}

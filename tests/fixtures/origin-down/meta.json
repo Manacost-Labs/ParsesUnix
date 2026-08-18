@@ -1,0 +1,9 @@
+{
+  "name": "origin-down",
+  "url": "https://demo-news.example/articles/solar-farm-riverton",
+  "status": 503,
+  "headers": {"Content-Type": "text/html"},
+  "body_file": "body.html",
+  "rules": {"min_body_bytes": 200},
+  "expected": {"verdict": "ORIGIN_DOWN", "paid_escalation_allowed": false}
+}

@@ -1,0 +1,9 @@
+{
+  "name": "rate-limited",
+  "url": "https://demo-news.example/api/articles/48211",
+  "status": 429,
+  "headers": {"Content-Type": "text/plain", "Retry-After": "30"},
+  "body_file": "body.txt",
+  "rules": {"min_body_bytes": 1},
+  "expected": {"verdict": "RATE_LIMITED", "paid_escalation_allowed": false}
+}

@@ -1,0 +1,63 @@
+from __future__ import annotations
+
+import sys
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from web_scraper.profiles.yamlish import YamlishError, loads  # noqa: E402
+
+
+class YamlishTests(unittest.TestCase):
+    def test_parses_nested_mappings_lists_and_scalars(self) -> None:
+        data = loads(
+            "a:\n"
+            "  b: 1\n"
+            "  c: [x, \"y,z\", 2]\n"
+            "  d:\n"
+            "    - kind: css\n"
+            "      fields:\n"
+            "        title: \"h1::text\"\n"
+            "    - plain\n"
+            "  e: null\n"
+            "  f: true\n"
+            "  g: -2.5\n"
+        )
+        self.assertEqual(data["a"]["b"], 1)
+        self.assertEqual(data["a"]["c"], ["x", "y,z", 2])
+        self.assertEqual(data["a"]["d"][0]["fields"]["title"], "h1::text")
+        self.assertEqual(data["a"]["d"][1], "plain")
+        self.assertIsNone(data["a"]["e"])
+        self.assertTrue(data["a"]["f"])
+        self.assertEqual(data["a"]["g"], -2.5)
+
+    def test_double_quoted_escapes_match_json(self) -> None:
+        data = loads('m: "^https://example\\\\.com/"')
+        self.assertEqual(data["m"], "^https://example\\.com/")
+
+    def test_comments_are_ignored_but_hash_in_quotes_survives(self) -> None:
+        data = loads('a: "x # y"  # trailing comment\n# full line\nb: 2\n')
+        self.assertEqual(data["a"], "x # y")
+        self.assertEqual(data["b"], 2)
+
+    def test_anchors_are_rejected(self) -> None:
+        with self.assertRaises(YamlishError):
+            loads("a: &anchor 1\n")
+
+    def test_block_scalars_are_rejected(self) -> None:
+        with self.assertRaises(YamlishError):
+            loads("a: |\n  text\n")
+
+    def test_tabs_in_indentation_are_rejected(self) -> None:
+        with self.assertRaises(YamlishError):
+            loads("a:\n\tb: 1\n")
+
+    def test_duplicate_keys_are_rejected(self) -> None:
+        with self.assertRaises(YamlishError):
+            loads("a: 1\na: 2\n")
+
+
+if __name__ == "__main__":
+    unittest.main()

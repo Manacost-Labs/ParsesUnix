@@ -1,0 +1,9 @@
+{
+  "name": "blocked",
+  "url": "https://demo-news.example/articles/solar-farm-riverton",
+  "status": 403,
+  "headers": {"Content-Type": "text/html; charset=utf-8", "cf-mitigated": "challenge"},
+  "body_file": "body.html",
+  "rules": {"min_body_bytes": 200},
+  "expected": {"verdict": "BLOCKED", "paid_escalation_allowed": true}
+}

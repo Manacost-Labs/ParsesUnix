@@ -1,0 +1,61 @@
+site: example.com
+authorization:
+  public_data_only: true
+
+url_classes:
+  article:
+    match: "^https://example\\.com/articles/"
+    expected_content_type: html
+    validation:
+      min_body_bytes: 500
+      canary: "<article"
+      stop_signatures: ["temporarily unavailable in your region"]
+      required_fields: [title, published_at]
+
+    routes:
+      primary:
+        type: direct_http
+        level: L1
+      alternatives:
+        - type: json_api
+          url: "https://example.com/api/articles/{id}"
+          level: L0
+        - type: rss
+          url: "https://example.com/feed"
+          mode: bulk
+          level: L0
+
+    extractors:
+      - kind: json_ld
+        schema_type: Article
+      - kind: css
+        fields:
+          title: "h1::text"
+          published_at: "time::attr(datetime)"
+    quorum_fields: [title, published_at]
+
+    session:
+      warmup: false
+      ttl_minutes: 30
+
+    pagination:
+      expected_count_selector: null
+      max_depth: 200
+
+    retry:
+      max_attempts: 2
+      backoff_seconds: 5
+
+    limits:
+      concurrency_per_domain: 2
+      paid_attempts_per_url: 2
+      daily_paid_credits: 0
+
+    freshness:
+      max_age_hours: 24
+      full_review_days: 7
+
+    promote:
+      min_completeness: 0.95
+      max_null_rate_growth: 2.0
+
