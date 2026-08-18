@@ -7,6 +7,7 @@ not invent their own verdicts, levels, or result shapes.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -88,6 +89,30 @@ class Route:
     url: str | None = None  # concrete URL or template with {placeholders}
     mode: str = "single"
     provider: str | None = None  # required for RouteType.PROVIDER only
+    #: Stable identity for statistics. A profile may declare one so a route keeps
+    #: its history across a URL change; otherwise it is derived (see ``route_id``).
+    id: str | None = None
+
+    @property
+    def route_id(self) -> str:
+        """The key under which this route's history is remembered.
+
+        Type and level alone are not an identity: a class can declare two JSON
+        APIs at L0, and merging their statistics would tell the router that one
+        endpoint is half-broken instead of that one works and one is dead.
+
+        A declared ``id`` wins, so renaming or re-pointing an endpoint keeps its
+        history. Otherwise a route without a URL derives to its bare type, which
+        is both readable and backward compatible with statistics recorded before
+        identities existed.
+        """
+
+        if self.id:
+            return self.id
+        if not self.url:
+            return self.type.value
+        digest = hashlib.sha256(self.url.encode("utf-8")).hexdigest()[:8]
+        return f"{self.type.value}:{digest}"
 
     def __post_init__(self) -> None:
         allowed = ROUTE_LEVELS[self.type]
@@ -110,6 +135,8 @@ class Route:
             "url": self.url,
             "mode": self.mode,
             "provider": self.provider,
+            "id": self.id,
+            "route_id": self.route_id,
         }
 
     @classmethod
@@ -120,6 +147,7 @@ class Route:
             url=data.get("url"),
             mode=data.get("mode", "single"),
             provider=data.get("provider"),
+            id=data.get("id"),
         )
 
 

@@ -23,7 +23,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
-from web_scraper.contracts import Verdict
+from web_scraper.contracts import Route, Verdict
 
 #: Verdicts that prove the route reached real content.
 SUCCESS_VERDICTS = frozenset({Verdict.OK, Verdict.NOT_MODIFIED})
@@ -67,13 +67,26 @@ def wilson_lower_bound(successes: int, attempts: int, *, z: float = 1.96) -> flo
 
 @dataclass(frozen=True)
 class RouteKey:
+    """Identity of one route's history.
+
+    ``route_id`` rather than the route *type*: a URL class may declare two JSON
+    APIs at L0, and merging them would report one half-broken endpoint instead of
+    one working and one dead.
+    """
+
     domain: str
     url_class: str
-    route_type: str
+    route_id: str
     level: str
 
     def as_tuple(self) -> tuple[str, str, str, str]:
-        return (self.domain, self.url_class, self.route_type, self.level)
+        return (self.domain, self.url_class, self.route_id, self.level)
+
+    @classmethod
+    def for_route(cls, route: Route, *, domain: str, url_class: str) -> RouteKey:
+        return cls(
+            domain=domain, url_class=url_class, route_id=route.route_id, level=route.level.value
+        )
 
 
 @dataclass(frozen=True)
@@ -104,7 +117,7 @@ class RouteStats:
         return {
             "domain": self.key.domain,
             "url_class": self.key.url_class,
-            "route": self.key.route_type,
+            "route": self.key.route_id,
             "level": self.key.level,
             "attempts": self.attempts,
             "scored_attempts": self.scored_attempts,
@@ -141,7 +154,7 @@ class RouteStatsStore:
                 CREATE TABLE IF NOT EXISTS route_stats (
                     domain TEXT NOT NULL,
                     url_class TEXT NOT NULL,
-                    route_type TEXT NOT NULL,
+                    route_id TEXT NOT NULL,
                     level TEXT NOT NULL,
                     attempts INTEGER NOT NULL DEFAULT 0,
                     scored_attempts INTEGER NOT NULL DEFAULT 0,
@@ -153,10 +166,24 @@ class RouteStatsStore:
                     cost_credits TEXT NOT NULL DEFAULT '0',
                     last_success REAL,
                     last_failure REAL,
-                    PRIMARY KEY (domain, url_class, route_type, level)
+                    PRIMARY KEY (domain, url_class, route_id, level)
                 )
                 """
             )
+            self._migrate_route_type_column(conn)
+
+    @staticmethod
+    def _migrate_route_type_column(conn: sqlite3.Connection) -> None:
+        """Carry a pre-identity database forward instead of orphaning its history.
+
+        The first version of this table keyed on ``route_type``. For every route
+        without a URL — the common case — the derived ``route_id`` is exactly the
+        old type string, so renaming the column preserves that history verbatim.
+        """
+
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(route_stats)")}
+        if "route_type" in columns and "route_id" not in columns:
+            conn.execute("ALTER TABLE route_stats RENAME COLUMN route_type TO route_id")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
@@ -216,11 +243,11 @@ class RouteStatsStore:
             conn.execute(
                 """
                 INSERT INTO route_stats(
-                    domain, url_class, route_type, level, attempts, scored_attempts,
+                    domain, url_class, route_id, level, attempts, scored_attempts,
                     validated_successes, blocks, soft_blocks, ewma_success, latency_ms,
                     cost_credits, last_success, last_failure
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(domain, url_class, route_type, level) DO UPDATE SET
+                ON CONFLICT(domain, url_class, route_id, level) DO UPDATE SET
                     attempts=excluded.attempts,
                     scored_attempts=excluded.scored_attempts,
                     validated_successes=excluded.validated_successes,
@@ -250,7 +277,7 @@ class RouteStatsStore:
     @staticmethod
     def _from_row(row: sqlite3.Row) -> RouteStats:
         return RouteStats(
-            key=RouteKey(row["domain"], row["url_class"], row["route_type"], row["level"]),
+            key=RouteKey(row["domain"], row["url_class"], row["route_id"], row["level"]),
             attempts=row["attempts"],
             scored_attempts=row["scored_attempts"],
             validated_successes=row["validated_successes"],
@@ -268,7 +295,7 @@ class RouteStatsStore:
             row = conn.execute(
                 """
                 SELECT * FROM route_stats
-                WHERE domain = ? AND url_class = ? AND route_type = ? AND level = ?
+                WHERE domain = ? AND url_class = ? AND route_id = ? AND level = ?
                 """,
                 key.as_tuple(),
             ).fetchone()

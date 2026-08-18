@@ -110,8 +110,8 @@ class GatewayRoutingTests(unittest.TestCase):
             router=router,
         )
 
-    def key(self, route_type: str, level: str) -> RouteKey:
-        return RouteKey(DOMAIN, "article", route_type, level)
+    def key(self, route_id: str, level: str) -> RouteKey:
+        return RouteKey(DOMAIN, "article", route_id, level)
 
     def test_attempts_are_recorded_against_the_route(self) -> None:
         profile = profile_with(L1_PRIMARY, [])

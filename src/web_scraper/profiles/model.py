@@ -182,7 +182,7 @@ def _parse_route(raw: Any, path: str, ctx: _Ctx, *, site: str = "") -> Route | N
     if not isinstance(raw, Mapping):
         ctx.err(path, "route must be a mapping")
         return None
-    _check_unknown(raw, {"type", "level", "url", "mode", "provider"}, path, ctx)
+    _check_unknown(raw, {"type", "level", "url", "mode", "provider", "id"}, path, ctx)
     try:
         route_type = RouteType(str(raw.get("type")))
     except ValueError:
@@ -194,6 +194,10 @@ def _parse_route(raw: Any, path: str, ctx: _Ctx, *, site: str = "") -> Route | N
         ctx.err(f"{path}.level", f"unknown level {raw.get('level')!r}; expected L0..L4")
         return None
     _validate_route_url(raw.get("url"), site, path, ctx)
+    declared_id = raw.get("id")
+    if declared_id is not None and (not isinstance(declared_id, str) or not declared_id.strip()):
+        ctx.err(f"{path}.id", "must be a non-empty string")
+        declared_id = None
     try:
         return Route(
             type=route_type,
@@ -201,6 +205,7 @@ def _parse_route(raw: Any, path: str, ctx: _Ctx, *, site: str = "") -> Route | N
             url=raw.get("url"),
             mode=raw.get("mode", "single"),
             provider=raw.get("provider"),
+            id=declared_id,
         )
     except ValueError as exc:
         ctx.err(path, str(exc))
@@ -467,6 +472,22 @@ def _parse_url_class(name: str, raw: Any, ctx: _Ctx, *, site: str = "") -> UrlCl
 
     if primary_route is None:
         return None
+
+    # Two routes sharing an identity would share statistics, and the router would
+    # read one half-broken route where there are two distinct ones.
+    seen_ids: dict[str, str] = {}
+    for index, candidate in enumerate([primary_route, *alternative_routes]):
+        where = (
+            f"{path}.routes.primary" if index == 0 else f"{path}.routes.alternatives[{index - 1}]"
+        )
+        previous = seen_ids.get(candidate.route_id)
+        if previous is not None:
+            ctx.err(
+                where,
+                f"route identity {candidate.route_id!r} is already used by {previous}; "
+                "give one of them an explicit unique 'id'",
+            )
+        seen_ids[candidate.route_id] = where
     return UrlClass(
         name=name,
         match_pattern=str(match_pattern),

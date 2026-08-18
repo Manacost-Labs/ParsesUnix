@@ -359,12 +359,7 @@ class FetchGateway:
         if self._route_stats is None:
             return
         self._route_stats.record(
-            RouteKey(
-                domain=domain,
-                url_class=url_class.name,
-                route_type=route.type.value,
-                level=route.level.value,
-            ),
+            RouteKey.for_route(route, domain=domain, url_class=url_class.name),
             verdict=triage.verdict,
             latency_ms=latency_ms,
         )

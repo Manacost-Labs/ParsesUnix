@@ -101,7 +101,7 @@ class RouterTests(unittest.TestCase):
         return AdaptiveRouter(self.store, **kwargs)
 
     def feed(self, route: Route, verdict: Verdict, times: int, **kwargs) -> None:
-        key = RouteKey(DOMAIN, URL_CLASS, route.type.value, route.level.value)
+        key = RouteKey.for_route(route, domain=DOMAIN, url_class=URL_CLASS)
         for _ in range(times):
             self.store.record(key, verdict=verdict, **kwargs)
 
@@ -181,3 +181,75 @@ class RouterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RouteIdentityTests(unittest.TestCase):
+    """Two routes of the same type and level are two routes, not one."""
+
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.store = RouteStatsStore(Path(self.tempdir.name) / "r.sqlite3", now=lambda: 1.0)
+
+    def test_two_apis_at_the_same_level_do_not_share_history(self) -> None:
+        v1 = Route(type=RouteType.JSON_API, level=Level.L0, url="https://x.example/api/v1")
+        v2 = Route(type=RouteType.JSON_API, level=Level.L0, url="https://x.example/api/v2")
+        self.assertNotEqual(v1.route_id, v2.route_id)
+
+        for _ in range(10):
+            self.store.record(
+                RouteKey.for_route(v1, domain=DOMAIN, url_class=URL_CLASS), verdict=Verdict.OK
+            )
+            self.store.record(
+                RouteKey.for_route(v2, domain=DOMAIN, url_class=URL_CLASS), verdict=Verdict.BLOCKED
+            )
+        good = self.store.get(RouteKey.for_route(v1, domain=DOMAIN, url_class=URL_CLASS))
+        dead = self.store.get(RouteKey.for_route(v2, domain=DOMAIN, url_class=URL_CLASS))
+        self.assertEqual(good.success_rate, 1.0)
+        self.assertEqual(dead.success_rate, 0.0)
+
+    def test_a_declared_id_survives_a_url_change(self) -> None:
+        before = Route(type=RouteType.JSON_API, level=Level.L0, url="https://x/api/v1", id="main")
+        after = Route(type=RouteType.JSON_API, level=Level.L0, url="https://x/api/v2", id="main")
+        self.assertEqual(before.route_id, after.route_id)
+        self.store.record(
+            RouteKey.for_route(before, domain=DOMAIN, url_class=URL_CLASS), verdict=Verdict.OK
+        )
+        carried = self.store.get(RouteKey.for_route(after, domain=DOMAIN, url_class=URL_CLASS))
+        self.assertEqual(carried.validated_successes, 1)
+
+    def test_a_urlless_route_keeps_its_pre_identity_key(self) -> None:
+        # Backward compatibility: statistics recorded before identities existed
+        # were keyed on the bare type, which is what these still derive to.
+        self.assertEqual(Route(type=RouteType.DIRECT_HTTP, level=Level.L1).route_id, "direct_http")
+        self.assertEqual(Route(type=RouteType.DYNAMIC, level=Level.L2).route_id, "dynamic")
+
+    def test_legacy_database_is_migrated_not_orphaned(self) -> None:
+        import sqlite3
+
+        legacy = Path(self.tempdir.name) / "legacy.sqlite3"
+        with sqlite3.connect(legacy) as conn:
+            conn.execute(
+                """
+                CREATE TABLE route_stats (
+                    domain TEXT NOT NULL, url_class TEXT NOT NULL, route_type TEXT NOT NULL,
+                    level TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+                    scored_attempts INTEGER NOT NULL DEFAULT 0,
+                    validated_successes INTEGER NOT NULL DEFAULT 0,
+                    blocks INTEGER NOT NULL DEFAULT 0, soft_blocks INTEGER NOT NULL DEFAULT 0,
+                    ewma_success REAL NOT NULL DEFAULT 0, latency_ms REAL NOT NULL DEFAULT 0,
+                    cost_credits TEXT NOT NULL DEFAULT '0', last_success REAL, last_failure REAL,
+                    PRIMARY KEY (domain, url_class, route_type, level)
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO route_stats(domain, url_class, route_type, level, attempts,"
+                " scored_attempts, validated_successes) VALUES (?, ?, ?, ?, 5, 5, 5)",
+                (DOMAIN, URL_CLASS, "direct_http", "L1"),
+            )
+
+        migrated = RouteStatsStore(legacy)
+        stats = migrated.get(RouteKey(DOMAIN, URL_CLASS, "direct_http", "L1"))
+        self.assertIsNotNone(stats, "pre-identity history must survive the migration")
+        self.assertEqual(stats.validated_successes, 5)

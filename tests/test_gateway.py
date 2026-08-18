@@ -332,16 +332,30 @@ class GatewayEscalationTests(unittest.TestCase):
         reasons = " ".join(s["reason"] for s in outcome.skipped_routes)
         self.assertIn("unsafe or invalid route URL", reasons)
 
-    def test_duplicate_route_is_attempted_once(self) -> None:
+    def test_an_identical_duplicate_route_is_rejected_by_the_validator(self) -> None:
+        from web_scraper.profiles import ProfileError
+
+        # Since routes carry an identity, an exact duplicate is now caught before
+        # any network access rather than silently deduplicated at run time.
+        with self.assertRaises(ProfileError) as caught:
+            make_profile(
+                {"type": "direct_http", "level": "L1"},
+                [{"type": "direct_http", "level": "L1"}],
+            )
+        self.assertTrue(any("route identity" in error for error in caught.exception.errors))
+
+    def test_two_identities_pointing_at_one_target_are_fetched_once(self) -> None:
+        # Distinct identities the validator accepts, but the same concrete target:
+        # the gateway must still not spend two requests on it.
         profile = make_profile(
-            {"type": "direct_http", "level": "L1"},
-            [{"type": "direct_http", "level": "L1"}],  # identical duplicate
+            {"type": "json_api", "level": "L0", "url": API_URL, "id": "primary"},
+            [{"type": "json_api", "level": "L0", "url": API_URL, "id": "mirror"}],
         )
-        l1 = FakeTransport({PAGE_URL: [fixture_response("redesigned")]})
-        outcome = gateway_for(profile, {"L1": l1}).fetch_url(PAGE_URL)
-        # PARSE_FAIL does not retry, so the deduped single route yields one
-        # attempt; the duplicate is reported as skipped rather than re-run.
-        self.assertEqual(len(outcome.result.attempts), 1)
+        l0 = FakeTransport(
+            {API_URL: [response(API_URL, 200, b"{}", {"Content-Type": "application/json"})]}
+        )
+        outcome = gateway_for(profile, {"L0": l0}).fetch_url(PAGE_URL)
+        self.assertEqual(len(l0.calls), 1)
         self.assertIn("duplicate route", " ".join(s["reason"] for s in outcome.skipped_routes))
 
     def test_circuit_breaker_opens_after_repeated_hard_failures(self) -> None:

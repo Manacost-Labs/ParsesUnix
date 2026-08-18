@@ -166,14 +166,7 @@ class AdaptiveRouter:
     def _stats_for(self, route: Route, domain: str, url_class: str) -> RouteStats | None:
         if self.stats is None:
             return None
-        return self.stats.get(
-            RouteKey(
-                domain=domain,
-                url_class=url_class,
-                route_type=route.type.value,
-                level=route.level.value,
-            )
-        )
+        return self.stats.get(RouteKey.for_route(route, domain=domain, url_class=url_class))
 
     def _apply_hysteresis(
         self, declared: Sequence[Route], ranked: list[RankedRoute]
