@@ -293,6 +293,26 @@ class QueueStore:
             )
             return cursor.rowcount
 
+    def done_urls(self) -> list[str]:
+        with closing(self._connect()) as conn:
+            rows = conn.execute("SELECT url FROM urls WHERE status = 'DONE'").fetchall()
+        return [row["url"] for row in rows]
+
+    def reactivate(self, urls: Iterable[str]) -> int:
+        """Move given DONE urls back to PENDING for a freshness re-crawl."""
+
+        now = self._now()
+        count = 0
+        with closing(self._connect()) as conn, conn:
+            for url in urls:
+                cursor = conn.execute(
+                    "UPDATE urls SET status = 'PENDING', updated_at = ? "
+                    "WHERE url = ? AND status = 'DONE'",
+                    (now, normalize_url(url)),
+                )
+                count += cursor.rowcount
+        return count
+
     def get(self, url: str) -> QueuedUrl | None:
         with closing(self._connect()) as conn:
             row = conn.execute(

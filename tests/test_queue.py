@@ -90,5 +90,14 @@ class QueueStoreTests(unittest.TestCase):
         self.assertNotIn(UrlStatus.IN_PROGRESS, set(statuses.values()))
 
 
+    def test_reactivate_moves_done_back_to_pending(self) -> None:
+        self.q.add("https://x.example/a")
+        self.q.claim_batch(10)
+        self.q.mark_done("https://x.example/a", verdict="OK")
+        self.assertEqual(self.q.done_urls(), ["https://x.example/a"])
+        moved = self.q.reactivate(["https://x.example/a"])
+        self.assertEqual(moved, 1)
+        self.assertEqual(self.q.get("https://x.example/a").status, UrlStatus.PENDING)
+
 if __name__ == "__main__":
     unittest.main()

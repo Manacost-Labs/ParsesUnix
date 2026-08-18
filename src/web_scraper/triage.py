@@ -128,6 +128,11 @@ def classify_response(
             len(payload),
         )
 
+    if status == 304:
+        return TriageResult(
+            Verdict.NOT_MODIFIED, "conditional request: content unchanged (HTTP 304)", status, len(payload)
+        )
+
     if status in {404, 410}:
         return TriageResult(Verdict.DEAD_URL, f"target returned HTTP {status}", status, len(payload))
 

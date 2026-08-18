@@ -38,6 +38,7 @@ ws-probe = "web_scraper.probe.cli:main"
 ws-triage = "web_scraper.triage:main"
 ws-profile = "web_scraper.profiles.cli:main"
 ws-budget = "web_scraper.budget:main"
+ws-run = "web_scraper.run.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -22,6 +22,7 @@ class Verdict(str, Enum):
     BLOCKED = "BLOCKED"
     SOFT_BLOCK = "SOFT_BLOCK"
     THIN_CONTENT = "THIN_CONTENT"
+    NOT_MODIFIED = "NOT_MODIFIED"  # 304 to a conditional request: unchanged, keep prior data
     PROVIDER_ERROR = "PROVIDER_ERROR"
     PARSE_FAIL = "PARSE_FAIL"
 

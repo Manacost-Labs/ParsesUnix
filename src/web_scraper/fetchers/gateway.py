@@ -56,7 +56,9 @@ MAX_FREE_RANK = Level.L2.rank
 
 TransportProvider = Callable[[Route, UrlClass, str], Transport]
 
-_TERMINAL_VERDICTS = frozenset({Verdict.DEAD_URL, Verdict.AUTH_REQUIRED, Verdict.ACCESS_DENIED})
+_TERMINAL_VERDICTS = frozenset(
+    {Verdict.DEAD_URL, Verdict.AUTH_REQUIRED, Verdict.ACCESS_DENIED, Verdict.NOT_MODIFIED}
+)
 _TEMPLATE_RE = re.compile(r"\{[^}]+\}")
 
 
@@ -176,7 +178,7 @@ class FetchGateway:
         self._breaker = breaker if breaker is not None else CircuitBreaker()
         self._clock = clock
 
-    def fetch_url(self, url: str) -> GatewayOutcome:
+    def fetch_url(self, url: str, *, extra_headers: dict[str, str] | None = None) -> GatewayOutcome:
         url_class = self.profile.class_for_url(url)
         if url_class is None:
             raise ValueError(f"no url class in profile {self.profile.site!r} matches {url!r}")
@@ -240,6 +242,7 @@ class FetchGateway:
                     url_class=url_class,
                     attempts=attempts,
                     snapshot_paths=snapshot_paths,
+                    extra_headers=extra_headers,
                 )
             except TransportUnavailable as exc:
                 skipped.append({"route": route.to_dict(), "reason": str(exc)})
@@ -326,6 +329,7 @@ class FetchGateway:
         url_class: UrlClass,
         attempts: list[Attempt],
         snapshot_paths: list[str],
+        extra_headers: dict[str, str] | None = None,
     ) -> tuple[TriageResult, RawResponse | None]:
         max_attempts = int(url_class.retry.get("max_attempts", 2))
         backoff_seconds = float(url_class.retry.get("backoff_seconds", 5))
@@ -338,7 +342,7 @@ class FetchGateway:
             self._pacer.pause(domain)
             started = self._clock()
             try:
-                response = transport.fetch(target)
+                response = transport.fetch(target, headers=extra_headers)
             except TransportUnavailable:
                 # If earlier attempts on this route already produced a verdict,
                 # keep it instead of discarding the route entirely.
