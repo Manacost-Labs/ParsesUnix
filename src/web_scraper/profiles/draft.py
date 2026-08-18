@@ -7,7 +7,8 @@ a reviewable starting point, not a production profile.
 from __future__ import annotations
 
 import re
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 from urllib.parse import urlsplit
 
 from web_scraper.profiles.model import parse_profile
@@ -87,11 +88,7 @@ def draft_profile_from_probe(
             extractors.append({"kind": "app_state", "source": source})
             break
     opengraph = discovery.get("opengraph", {})
-    meta_fields = {
-        field: f"og:{field}"
-        for field in required_fields
-        if f"og:{field}" in opengraph
-    }
+    meta_fields = {field: f"og:{field}" for field in required_fields if f"og:{field}" in opengraph}
     if meta_fields:
         extractors.append({"kind": "meta", "fields": meta_fields})
     extractors.append({"kind": "heuristic"})
@@ -148,12 +145,12 @@ def merge_api_candidate(
     if not new_route["url"]:
         raise ValueError("candidate has no URL")
 
-    updated = {key: value for key, value in profile.items()}
+    updated = dict(profile)
     classes = dict(updated.get("url_classes", {}))
     if url_class not in classes:
         raise KeyError(f"url class {url_class!r} is not present in the profile")
-    cls = {key: value for key, value in classes[url_class].items()}
-    routes = {key: value for key, value in cls.get("routes", {}).items()}
+    cls = dict(classes[url_class])
+    routes = dict(cls.get("routes", {}))
     primary = dict(routes.get("primary", {}))
     alternatives = [dict(item) for item in routes.get("alternatives", [])]
 

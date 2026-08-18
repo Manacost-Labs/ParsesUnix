@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 MAX_LIST_ITEMS = 20
@@ -162,7 +163,9 @@ def discover(body: bytes, final_url: str, content_type: str) -> dict[str, Any]:
     }
 
 
-def classify_rendering(body: bytes, content_type: str, app_state: Mapping[str, bool]) -> dict[str, Any]:
+def classify_rendering(
+    body: bytes, content_type: str, app_state: Mapping[str, bool]
+) -> dict[str, Any]:
     if "html" not in content_type.lower():
         return {
             "classification": "non_html",
@@ -213,15 +216,33 @@ def recommend(
     candidates: list[dict[str, Any]] = []
     for feed in discovery["alternates"]["rss_atom"]:
         candidates.append(
-            {"type": "rss", "level": "L0", "url": feed["url"], "source": "link-alternate", "verified": False}
+            {
+                "type": "rss",
+                "level": "L0",
+                "url": feed["url"],
+                "source": "link-alternate",
+                "verified": False,
+            }
         )
     for sitemap_url in robots.get("sitemaps", []):
         candidates.append(
-            {"type": "sitemap", "level": "L0", "url": sitemap_url, "source": "robots", "verified": False}
+            {
+                "type": "sitemap",
+                "level": "L0",
+                "url": sitemap_url,
+                "source": "robots",
+                "verified": False,
+            }
         )
     for api_url in discovery["api_hints"]["urls"][:5]:
         candidates.append(
-            {"type": "json_api", "level": "L0", "url": api_url, "source": "static-hint", "verified": False}
+            {
+                "type": "json_api",
+                "level": "L0",
+                "url": api_url,
+                "source": "static-hint",
+                "verified": False,
+            }
         )
     if discovery["alternates"]["amp_url"]:
         candidates.append(
@@ -244,7 +265,9 @@ def recommend(
         reasons.append("content is server-rendered; direct HTTP should be enough")
     elif classification == "csr":
         start_level = "L2"
-        reasons.append("CSR shell without static data; run browser recon to look for an L0 API first")
+        reasons.append(
+            "CSR shell without static data; run browser recon to look for an L0 API first"
+        )
     else:
         start_level = "L1"
         reasons.append("no strong signal; start with direct HTTP and re-triage")

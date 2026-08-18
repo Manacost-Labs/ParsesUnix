@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from web_scraper.extract import dom
 from web_scraper.extract.normalize import normalize_value
@@ -106,7 +107,7 @@ def _iter_json_ld(text: str) -> list[Any]:
     return objects
 
 
-def _json_ld_object(text: str, schema_type: str | None) -> dict | None:
+def _json_ld_object(text: str, schema_type: str | None) -> dict[str, Any] | None:
     for obj in _iter_json_ld(text):
         if not isinstance(obj, dict):
             continue
@@ -124,7 +125,9 @@ def _json_ld_object(text: str, schema_type: str | None) -> dict | None:
     return None
 
 
-def _resolve_alias(obj: Mapping[str, Any], field_name: str, aliases: Mapping[str, tuple[str, ...]]) -> Any:
+def _resolve_alias(
+    obj: Mapping[str, Any], field_name: str, aliases: Mapping[str, tuple[str, ...]]
+) -> Any:
     for key in aliases.get(field_name, (field_name,)):
         value = _walk_json_path(obj, key) if "." in key else obj.get(key)
         if value is None:
@@ -148,17 +151,19 @@ def _extract_meta(text: str) -> dict[str, str]:
     return props
 
 
-def _extract_app_state(text: str) -> dict | None:
+def _extract_app_state(text: str) -> dict[str, Any] | None:
     match = _NEXT_DATA_RE.search(text)
     if match:
         try:
-            return json.loads(match.group(1).strip())
+            parsed: dict[str, Any] = json.loads(match.group(1).strip())
+            return parsed
         except json.JSONDecodeError:
             pass
     match = _STATE_RE.search(text)
     if match:
         try:
-            return json.loads(match.group(1))
+            state: dict[str, Any] = json.loads(match.group(1))
+            return state
         except json.JSONDecodeError:
             pass
     return None
@@ -170,7 +175,7 @@ def _one_extractor(
     *,
     text: str,
     tree: dom.Node,
-    app_state: dict | None,
+    app_state: dict[str, Any] | None,
     fields: Sequence[str],
     field_kinds: Mapping[str, str],
     base_url: str | None,
@@ -184,14 +189,18 @@ def _one_extractor(
             for f in fields:
                 raw = _resolve_alias(obj, f, JSON_LD_ALIASES)
                 if raw is not None:
-                    out[f] = normalize_value(raw, kind=field_kinds.get(f, "text"), base_url=base_url)
+                    out[f] = normalize_value(
+                        raw, kind=field_kinds.get(f, "text"), base_url=base_url
+                    )
     elif kind == "app_state":
         mapping = spec.get("fields") or {}
         if app_state is not None:
             for f, path in mapping.items():
                 raw = _walk_json_path(app_state, str(path))
                 if raw is not None:
-                    out[f] = normalize_value(raw, kind=field_kinds.get(f, "text"), base_url=base_url)
+                    out[f] = normalize_value(
+                        raw, kind=field_kinds.get(f, "text"), base_url=base_url
+                    )
     elif kind == "meta":
         meta = _extract_meta(text)
         mapping = spec.get("fields")
@@ -199,7 +208,9 @@ def _one_extractor(
             keys = [mapping[f]] if mapping and f in mapping else list(OG_ALIASES.get(f, ()))
             for key in keys:
                 if key.lower() in meta:
-                    out[f] = normalize_value(meta[key.lower()], kind=field_kinds.get(f, "text"), base_url=base_url)
+                    out[f] = normalize_value(
+                        meta[key.lower()], kind=field_kinds.get(f, "text"), base_url=base_url
+                    )
                     break
     elif kind in {"css", "xpath"}:
         mapping = spec.get("fields") or {}
@@ -210,7 +221,9 @@ def _one_extractor(
     elif kind == "heuristic":
         title = dom.query_value(tree, "h1::text") or dom.query_value(tree, "title::text")
         if title and "title" in fields:
-            out["title"] = normalize_value(title, kind=field_kinds.get("title", "text"), base_url=base_url)
+            out["title"] = normalize_value(
+                title, kind=field_kinds.get("title", "text"), base_url=base_url
+            )
     return out
 
 
@@ -234,8 +247,14 @@ def extract_fields(
     for spec in extractors:
         kind = str(spec.get("kind"))
         produced = _one_extractor(
-            kind, spec, text=text, tree=tree, app_state=app_state,
-            fields=fields, field_kinds=field_kinds, base_url=base_url,
+            kind,
+            spec,
+            text=text,
+            tree=tree,
+            app_state=app_state,
+            fields=fields,
+            field_kinds=field_kinds,
+            base_url=base_url,
         )
         for f, value in produced.items():
             if f not in data and value is not None and value != "":
@@ -266,8 +285,14 @@ def run_quorum(
     for spec in extractors:
         kind = str(spec.get("kind"))
         produced = _one_extractor(
-            kind, spec, text=text, tree=tree, app_state=app_state,
-            fields=quorum_fields, field_kinds=field_kinds, base_url=base_url,
+            kind,
+            spec,
+            text=text,
+            tree=tree,
+            app_state=app_state,
+            fields=quorum_fields,
+            field_kinds=field_kinds,
+            base_url=base_url,
         )
         for f, value in produced.items():
             if value is not None and value != "":
@@ -291,4 +316,6 @@ def run_quorum(
         else:
             quorum[f] = "conflict"
             conflicts.append(f)
-    return ExtractionResult(data=all_values, sources=sources, quorum=quorum, conflicts=tuple(conflicts))
+    return ExtractionResult(
+        data=all_values, sources=sources, quorum=quorum, conflicts=tuple(conflicts)
+    )

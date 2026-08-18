@@ -9,8 +9,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from web_scraper.diagnose.analyze import Diagnosis, diagnose_attempts, diagnose_queue
 from web_scraper.queue import QueueStore
@@ -38,15 +38,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             path = args.queue or (args.state_dir / "queue.sqlite3")
             if not path.exists():
                 raise FileNotFoundError(f"queue database not found: {path}")
-            diagnosis = diagnose_queue(
-                QueueStore(path), limit=args.limit, sample_urls=args.samples
-            )
+            diagnosis = diagnose_queue(QueueStore(path), limit=args.limit, sample_urls=args.samples)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 2
 
     if args.json:
-        print(json.dumps({"ok": True, "diagnosis": diagnosis.to_dict()}, ensure_ascii=False, indent=2))
+        print(
+            json.dumps({"ok": True, "diagnosis": diagnosis.to_dict()}, ensure_ascii=False, indent=2)
+        )
     else:
         _print_text(diagnosis)
     return 0

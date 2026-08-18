@@ -34,7 +34,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     reviewed = dt.date.fromisoformat(match.group(1))
-    today = dt.date.fromisoformat(args.today) if args.today else dt.date.today()
+    today = dt.date.fromisoformat(args.today) if args.today else dt.datetime.now(dt.UTC).date()
     age = (today - reviewed).days
     if age > args.max_age_days:
         print(

@@ -13,12 +13,27 @@ lxml/bs4. Anything fancier should be expressed as a JSON-LD / app-state route.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
-from typing import Iterator
 
 _VOID_TAGS = frozenset(
-    {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+    {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    }
 )
 _SKIP_TEXT_TAGS = frozenset({"script", "style", "noscript", "template"})
 
@@ -27,8 +42,8 @@ _SKIP_TEXT_TAGS = frozenset({"script", "style", "noscript", "template"})
 class Node:
     tag: str
     attrs: dict[str, str] = field(default_factory=dict)
-    children: list["Node"] = field(default_factory=list)
-    parent: "Node | None" = None
+    children: list[Node] = field(default_factory=list)
+    parent: Node | None = None
     text_parts: list[str] = field(default_factory=list)
 
     @property
@@ -38,7 +53,7 @@ class Node:
     def text(self) -> str:
         parts: list[str] = []
 
-        def walk(node: "Node") -> None:
+        def walk(node: Node) -> None:
             parts.extend(node.text_parts)
             for child in node.children:
                 if child.tag not in _SKIP_TEXT_TAGS:
@@ -47,7 +62,7 @@ class Node:
         walk(self)
         return re.sub(r"\s+", " ", "".join(parts)).strip()
 
-    def descendants(self) -> Iterator["Node"]:
+    def descendants(self) -> Iterator[Node]:
         for child in self.children:
             yield child
             yield from child.descendants()

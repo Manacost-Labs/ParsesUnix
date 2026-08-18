@@ -12,8 +12,8 @@ never be labelled "escalate", no matter how large it is.
 """
 
 from web_scraper.diagnose.analyze import (
-    FailureGroup,
     Diagnosis,
+    FailureGroup,
     diagnose_attempts,
     diagnose_queue,
 )

@@ -21,10 +21,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from web_scraper.fetchers.base import TransportUnavailable  # noqa: E402
-from web_scraper.fetchers.transports import PlaywrightRenderTransport, playwright_available  # noqa: E402
-from web_scraper.probe.browser import browser_recon  # noqa: E402
-from web_scraper.probe.safety import UnsafeTarget  # noqa: E402
+from web_scraper.fetchers.base import TransportUnavailable
+from web_scraper.fetchers.transports import (
+    PlaywrightRenderTransport,
+    playwright_available,
+)
+from web_scraper.probe.browser import browser_recon
+from web_scraper.probe.safety import UnsafeTarget
 
 SPA_HTML = """<!DOCTYPE html>
 <html><head><title>Catalog</title></head>
@@ -46,7 +49,7 @@ API_PAYLOAD = {
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):  # noqa: N802
+    def do_GET(self):
         if self.path.startswith("/api/items"):
             body = json.dumps(API_PAYLOAD).encode()
             content_type = "application/json"

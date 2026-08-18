@@ -73,41 +73,41 @@ def _split_inline_list(inner: str, line_no: int) -> list[str]:
     return [item for item in items if item]
 
 
-def _parse_scalar(token: str, line_no: int) -> Any:
-    if token.startswith('"'):
+def _parse_scalar(scalar: str, line_no: int) -> Any:
+    if scalar.startswith('"'):
         try:
-            return json.loads(token)
+            return json.loads(scalar)
         except json.JSONDecodeError as exc:
             raise YamlishError(f"invalid double-quoted string: {exc}", line_no) from exc
-    if token.startswith("'"):
-        if len(token) < 2 or not token.endswith("'"):
+    if scalar.startswith("'"):
+        if len(scalar) < 2 or not scalar.endswith("'"):
             raise YamlishError("unterminated single-quoted string", line_no)
-        return token[1:-1].replace("''", "'")
-    if token.startswith("["):
-        if not token.endswith("]"):
+        return scalar[1:-1].replace("''", "'")
+    if scalar.startswith("["):
+        if not scalar.endswith("]"):
             raise YamlishError("inline list must close on the same line", line_no)
-        return [_parse_scalar(item, line_no) for item in _split_inline_list(token[1:-1], line_no)]
-    if token.startswith("{"):
-        if token == "{}":
+        return [_parse_scalar(item, line_no) for item in _split_inline_list(scalar[1:-1], line_no)]
+    if scalar.startswith("{"):
+        if scalar == "{}":
             return {}
         raise YamlishError("flow mappings are not supported; use block style", line_no)
-    if token.startswith(_UNSUPPORTED_LEAD):
+    if scalar.startswith(_UNSUPPORTED_LEAD):
         raise YamlishError(
-            f"unsupported YAML feature at {token[:10]!r} (anchors, tags, and block scalars "
+            f"unsupported YAML feature at {scalar[:10]!r} (anchors, tags, and block scalars "
             "are not part of the profile subset)",
             line_no,
         )
-    if token in {"null", "~"}:
+    if scalar in {"null", "~"}:
         return None
-    if token == "true":
+    if scalar == "true":
         return True
-    if token == "false":
+    if scalar == "false":
         return False
-    if re.fullmatch(r"-?\d+", token):
-        return int(token)
-    if re.fullmatch(r"-?\d+\.\d*(?:[eE][+-]?\d+)?", token):
-        return float(token)
-    return token
+    if re.fullmatch(r"-?\d+", scalar):
+        return int(scalar)
+    if re.fullmatch(r"-?\d+\.\d*(?:[eE][+-]?\d+)?", scalar):
+        return float(scalar)
+    return scalar
 
 
 class _Parser:
@@ -142,7 +142,7 @@ class _Parser:
             return self._parse_list(index, indent)
         return self._parse_mapping(index, indent)
 
-    def _parse_mapping(self, index: int, indent: int) -> tuple[dict, int]:
+    def _parse_mapping(self, index: int, indent: int) -> tuple[dict[str, Any], int]:
         mapping: dict[str, Any] = {}
         while index < len(self.lines):
             item_indent, content, line_no = self.lines[index]
@@ -169,7 +169,7 @@ class _Parser:
             mapping[key] = value
         return mapping, index
 
-    def _parse_list(self, index: int, indent: int) -> tuple[list, int]:
+    def _parse_list(self, index: int, indent: int) -> tuple[list[Any], int]:
         items: list[Any] = []
         while index < len(self.lines):
             item_indent, content, line_no = self.lines[index]

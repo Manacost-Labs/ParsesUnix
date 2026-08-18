@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from web_scraper.run.sweep import sweep_dead_urls  # noqa: E402
+from web_scraper.run.sweep import sweep_dead_urls
 
 
 class SweepTests(unittest.TestCase):

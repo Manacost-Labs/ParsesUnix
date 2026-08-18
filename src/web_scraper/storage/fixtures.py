@@ -9,9 +9,10 @@ live network traffic.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from web_scraper.contracts import ContentRules, TriageResult
 from web_scraper.triage import classify_response

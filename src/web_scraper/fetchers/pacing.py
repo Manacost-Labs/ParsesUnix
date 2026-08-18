@@ -5,15 +5,13 @@ from __future__ import annotations
 import random
 import threading
 import time
-from typing import Callable, Mapping
+from collections.abc import Callable, Mapping
 
 
 def parse_retry_after(headers: Mapping[str, str]) -> float | None:
     """Read Retry-After seconds from response headers (dates are ignored)."""
 
-    value = next(
-        (item for key, item in headers.items() if str(key).lower() == "retry-after"), None
-    )
+    value = next((item for key, item in headers.items() if str(key).lower() == "retry-after"), None)
     if value is None:
         return None
     try:

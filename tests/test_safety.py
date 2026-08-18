@@ -8,11 +8,11 @@ from urllib.request import Request
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from web_scraper.probe.safety import (  # noqa: E402
+from web_scraper.probe.safety import (
     SENSITIVE_REQUEST_HEADERS,
-    is_public_url,
     UnsafeTarget,
     ValidatingRedirectHandler,
+    is_public_url,
     pick_safe_address,
     validate_public_url,
 )
@@ -65,7 +65,9 @@ class PinningTests(unittest.TestCase):
         self.assertEqual(pick_safe_address("1.1.1.1", 443, resolver=PRIVATE), "1.1.1.1")
 
     def test_pick_allow_private_skips_validation(self) -> None:
-        self.assertEqual(pick_safe_address("intranet", 80, resolver=PRIVATE, allow_private=True), "10.0.0.7")
+        self.assertEqual(
+            pick_safe_address("intranet", 80, resolver=PRIVATE, allow_private=True), "10.0.0.7"
+        )
 
 
 class RedirectHeaderStrippingTests(unittest.TestCase):
@@ -115,4 +117,6 @@ class IsPublicUrlTests(unittest.TestCase):
         self.assertTrue(is_public_url("http://ok.example/", resolver=PUBLIC))
 
     def test_allow_private_override(self) -> None:
-        self.assertTrue(is_public_url("http://intranet.example/", resolver=PRIVATE, allow_private=True))
+        self.assertTrue(
+            is_public_url("http://intranet.example/", resolver=PRIVATE, allow_private=True)
+        )

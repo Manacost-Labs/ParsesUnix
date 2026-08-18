@@ -6,6 +6,6 @@ Order of cheap-to-strong change signals (killer-feature doc, part 2):
 3. an adaptive per-URL interval so stable pages are polled less often.
 """
 
-from web_scraper.freshness.store import FreshnessStore, FreshnessRecord, content_hash
+from web_scraper.freshness.store import FreshnessRecord, FreshnessStore, content_hash
 
-__all__ = ["FreshnessStore", "FreshnessRecord", "content_hash"]
+__all__ = ["FreshnessRecord", "FreshnessStore", "content_hash"]

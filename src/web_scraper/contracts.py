@@ -7,12 +7,13 @@ not invent their own verdicts, levels, or result shapes.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Mapping
+from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Any
 
 
-class Verdict(str, Enum):
+class Verdict(StrEnum):
     OK = "OK"
     DEAD_URL = "DEAD_URL"
     ORIGIN_DOWN = "ORIGIN_DOWN"
@@ -36,7 +37,7 @@ FREE_ESCALATION_VERDICTS = frozenset({Verdict.BLOCKED, Verdict.SOFT_BLOCK})
 PAID_ESCALATION_VERDICTS = frozenset({Verdict.BLOCKED, Verdict.SOFT_BLOCK})
 
 
-class Level(str, Enum):
+class Level(StrEnum):
     """Fetching levels ordered from cheapest to most expensive."""
 
     L0 = "L0"  # machine-readable routes: JSON API, RSS/Atom, sitemap
@@ -54,7 +55,7 @@ class Level(str, Enum):
         return self in (Level.L3, Level.L4)
 
 
-class RouteType(str, Enum):
+class RouteType(StrEnum):
     JSON_API = "json_api"
     RSS = "rss"
     SITEMAP = "sitemap"
@@ -93,7 +94,7 @@ class Route:
         if self.level not in allowed:
             raise ValueError(
                 f"route type {self.type.value!r} is not allowed at level "
-                f"{self.level.value}; allowed: {sorted(l.value for l in allowed)}"
+                f"{self.level.value}; allowed: {sorted(level.value for level in allowed)}"
             )
         if self.mode not in ROUTE_MODES:
             raise ValueError(f"route mode must be one of {ROUTE_MODES}, got {self.mode!r}")
@@ -112,7 +113,7 @@ class Route:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "Route":
+    def from_dict(cls, data: Mapping[str, Any]) -> Route:
         return cls(
             type=RouteType(data["type"]),
             level=Level(data["level"]),
@@ -198,7 +199,7 @@ class Attempt:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "Attempt":
+    def from_dict(cls, data: Mapping[str, Any]) -> Attempt:
         route = data.get("route")
         return cls(
             url=data["url"],
@@ -240,7 +241,7 @@ class Result:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "Result":
+    def from_dict(cls, data: Mapping[str, Any]) -> Result:
         return cls(
             url=data["url"],
             verdict=Verdict(data["verdict"]),

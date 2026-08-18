@@ -7,15 +7,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from web_scraper.contracts import Verdict  # noqa: E402
-from web_scraper.fetchers import (  # noqa: E402
+from web_scraper.contracts import Verdict
+from web_scraper.fetchers import (
     FetchGateway,
     Pacer,
     RawResponse,
     TransportUnavailable,
 )
-from web_scraper.profiles import parse_profile  # noqa: E402
-from web_scraper.storage import load_saved_response  # noqa: E402
+from web_scraper.profiles import parse_profile
+from web_scraper.storage import load_saved_response
 
 FIXTURES = ROOT / "tests" / "fixtures"
 PAGE_URL = "https://demo-news.example/articles/solar-farm-riverton"
@@ -217,7 +217,11 @@ class GatewayNeverEscalatesTests(unittest.TestCase):
             ],
         )
         l0 = FakeTransport(
-            {FEED_URL: [response(FEED_URL, 200, FEED_BODY, {"Content-Type": "application/rss+xml"})]}
+            {
+                FEED_URL: [
+                    response(FEED_URL, 200, FEED_BODY, {"Content-Type": "application/rss+xml"})
+                ]
+            }
         )
         l1 = FakeTransport({PAGE_URL: [fixture_response("redesigned")]})
         l2 = FakeTransport({PAGE_URL: [fixture_response("success")]})
@@ -276,7 +280,11 @@ class GatewayEscalationTests(unittest.TestCase):
 
     def test_unresolvable_template_primary_falls_through_to_next_route(self) -> None:
         profile = make_profile(
-            {"type": "json_api", "level": "L0", "url": "https://demo-news.example/api/articles/{id}"},
+            {
+                "type": "json_api",
+                "level": "L0",
+                "url": "https://demo-news.example/api/articles/{id}",
+            },
             [{"type": "direct_http", "level": "L1"}],
         )
         l1 = FakeTransport({PAGE_URL: [fixture_response("success")]})
@@ -339,14 +347,19 @@ class GatewayEscalationTests(unittest.TestCase):
     def test_circuit_breaker_opens_after_repeated_hard_failures(self) -> None:
         from web_scraper.fetchers.circuit import CircuitBreaker
 
-        profile = make_profile({"type": "direct_http", "level": "L1", "url": None},
-                               retry={"max_attempts": 1, "backoff_seconds": 0})
+        profile = make_profile(
+            {"type": "direct_http", "level": "L1", "url": None},
+            retry={"max_attempts": 1, "backoff_seconds": 0},
+        )
         breaker = CircuitBreaker(threshold=2)
 
         def gw():
             l1 = FakeTransport({PAGE_URL: [fixture_response("blocked")]})
             return FetchGateway(
-                profile, transport_provider=lambda r, c, u: l1, pacer=RecordingPacer(), breaker=breaker
+                profile,
+                transport_provider=lambda r, c, u: l1,
+                pacer=RecordingPacer(),
+                breaker=breaker,
             )
 
         gw().fetch_url(PAGE_URL)  # 1st hard failure
@@ -355,8 +368,10 @@ class GatewayEscalationTests(unittest.TestCase):
         # Third call is short-circuited without touching the transport.
         blocked_transport = FakeTransport({PAGE_URL: [fixture_response("success")]})
         gw3 = FetchGateway(
-            profile, transport_provider=lambda r, c, u: blocked_transport,
-            pacer=RecordingPacer(), breaker=breaker,
+            profile,
+            transport_provider=lambda r, c, u: blocked_transport,
+            pacer=RecordingPacer(),
+            breaker=breaker,
         )
         outcome = gw3.fetch_url(PAGE_URL)
         self.assertEqual(blocked_transport.calls, [])  # not called

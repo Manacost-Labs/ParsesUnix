@@ -5,8 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
+from typing import Any
 
 from web_scraper.probe.browser import BrowserUnavailable, browser_recon
 from web_scraper.probe.safety import UnsafeTarget
@@ -15,7 +16,9 @@ from web_scraper.profiles.draft import draft_profile_from_probe
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Safe, bounded static reconnaissance for a public web target.")
+    parser = argparse.ArgumentParser(
+        description="Safe, bounded static reconnaissance for a public web target."
+    )
     parser.add_argument("url")
     parser.add_argument(
         "--allow-private",
@@ -61,7 +64,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 2
 
-    output: dict = {"ok": True, "report": report.to_dict()}
+    output: dict[str, Any] = {"ok": True, "report": report.to_dict()}
 
     if args.browser or args.force_browser:
         target_fields = args.target_field or ["title"]

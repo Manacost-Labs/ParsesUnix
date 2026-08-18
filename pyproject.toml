@@ -42,6 +42,46 @@ ws-run = "web_scraper.run.cli:main"
 ws-regress = "web_scraper.regression.cli:main"
 ws-diagnose = "web_scraper.diagnose.cli:main"
 
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests", "tools"]
+
+[tool.ruff.lint]
+# Chosen for defect-finding, not style policing: pyflakes/bugbear catch real bugs,
+# BLE/S forbid the swallow-everything pattern, DTZ catches naive-datetime billing
+# bugs, and I/UP keep imports and syntax current.
+select = ["E", "W", "F", "I", "UP", "B", "BLE", "S", "DTZ", "SIM", "RUF", "PIE", "C4"]
+ignore = [
+    "S101",  # assert: used deliberately in tests and as internal invariants
+    "E501",  # line length is enforced by the formatter, not the linter
+    "SIM105",  # contextlib.suppress is not clearer than try/except/pass here
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests deliberately import after sys.path setup and use loopback fixtures.
+"tests/*" = ["E402", "S104", "S310", "RUF012"]
+"tools/*" = ["S310"]
+# S310: every URL reaching urlopen here has already passed validate_public_url,
+# which rejects any scheme other than http/https and any non-public address.
+"src/web_scraper/fetchers/transports.py" = ["S310"]
+"src/web_scraper/probe/static.py" = ["S310"]
+# RUF001: a literal NO-BREAK SPACE is the input these modules exist to normalize.
+"src/web_scraper/extract/normalize.py" = ["RUF001"]
+"tests/test_extract.py" = ["E402", "RUF001", "RUF012"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/web_scraper"]
+strict = true
+# Playwright/Scrapling are optional extras; the package must type-check without them.
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# CLI modules are argparse glue whose argument objects are dynamically typed.
+module = ["web_scraper.*.cli", "web_scraper.budget"]
+disallow_any_expr = false
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

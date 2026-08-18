@@ -8,9 +8,9 @@ window, batch size, and whether this is a full revision.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -42,12 +42,12 @@ class RunConfig:
         return self.state_dir / "snapshots"
 
     @classmethod
-    def from_file(cls, path: str | Path) -> "RunConfig":
+    def from_file(cls, path: str | Path) -> RunConfig:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         return cls.from_dict(data, base_dir=Path(path).parent)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any], *, base_dir: Path | None = None) -> "RunConfig":
+    def from_dict(cls, data: dict[str, Any], *, base_dir: Path | None = None) -> RunConfig:
         base = base_dir or Path.cwd()
 
         def resolve(p: str) -> Path:

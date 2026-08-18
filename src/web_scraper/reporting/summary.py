@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Mapping
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 from web_scraper.contracts import PAID_ESCALATION_VERDICTS, Result, Verdict
 

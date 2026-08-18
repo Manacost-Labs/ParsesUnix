@@ -11,15 +11,19 @@ Ties the pieces together with the invariants the whole project exists for:
 
 from __future__ import annotations
 
+import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from web_scraper.contracts import Result, Verdict
 from web_scraper.extract import extract_fields, run_quorum
-from web_scraper.fetchers import CircuitBreaker, FetchGateway
+from web_scraper.fetchers import CircuitBreaker, FetchGateway, RawResponse
+from web_scraper.fetchers.gateway import GatewayOutcome
 from web_scraper.freshness import FreshnessStore
-from web_scraper.observability import AlertEvent, Alerter, LoggingAlerter, RunMetrics
+from web_scraper.observability import Alerter, AlertEvent, LoggingAlerter, RunMetrics
+from web_scraper.observability.accounting import build_accounting
 from web_scraper.observability.metrics import build_report
 from web_scraper.profiles import load_profile
 from web_scraper.profiles.model import SiteProfile, UrlClass
@@ -28,6 +32,8 @@ from web_scraper.queue import QueueStore, normalize_url
 from web_scraper.queue.store import QueuedUrl
 from web_scraper.run.config import RunConfig
 from web_scraper.storage.snapshots import SnapshotStore
+
+logger = logging.getLogger(__name__)
 
 # Verdict -> retry backoff (seconds) for transient failures.
 _RETRY_BACKOFF = {Verdict.RATE_LIMITED: 1800.0, Verdict.ORIGIN_DOWN: 7200.0}
@@ -68,9 +74,13 @@ class Runner:
     # -- public ------------------------------------------------------------
 
     def run(self) -> RunResult:
+        # Track whether each seeded URL actually reached the queue: a URL lost
+        # between the caller and the ledger would otherwise be invisible.
+        seeded: dict[str, bool] = {}
         for url in self.config.seed_urls:
             url_class = self.profile.class_for_url(url)
             self.queue.add(url, url_class=url_class.name if url_class else None)
+            seeded[url] = self.queue.get(url) is not None
 
         # Resume: any IN_PROGRESS row is from a crashed run.
         self.queue.reset_stale_in_progress()
@@ -79,7 +89,8 @@ class Runner:
         # Freshness re-crawl: re-open DONE urls whose interval has elapsed (or
         # everything under a full review), so unchanged pages get a cheap 304.
         due = [
-            url for url in self.queue.done_urls()
+            url
+            for url in self.queue.done_urls()
             if self.freshness.is_due(url, full_review=self.config.full_review)
         ]
         if due:
@@ -91,22 +102,35 @@ class Runner:
         start = self._clock()
         processed = 0
         while True:
-            if self.config.deadline_seconds is not None and (self._clock() - start) >= self.config.deadline_seconds:
+            if (
+                self.config.deadline_seconds is not None
+                and (self._clock() - start) >= self.config.deadline_seconds
+            ):
                 break
             batch = self.queue.claim_batch(self.config.batch_size)
             if not batch:
                 break
             for queued in batch:
-                self._process(queued)
+                self._process_guarded(queued)
                 processed += 1
 
         promote = self._promote()
+        accounting = build_accounting(self.queue.counts_by_status(), seeded_urls=seeded)
+        if not accounting.is_complete:
+            self.alerter.send(
+                AlertEvent(
+                    kind="unaccounted_urls",
+                    message="run finished with URLs that are not accounted for",
+                    context=accounting.to_dict(),
+                )
+            )
         report = build_report(
             self._results,
             metrics=self.metrics,
             quarantined_urls=[q["url"] for q in self.queue.quarantined()],
             dead_zone_urls=[d["url"] for d in self.queue.dead_zones()],
             promote=promote,
+            accounting=accounting,
         )
         self._final_alerts(report.to_dict(), promote)
         return RunResult(report=report.to_dict(), promote=promote, processed=processed)
@@ -121,7 +145,9 @@ class Runner:
         head = getattr(transport, "head", None)
         if head is None:
             return
-        pending = [row.url for row in self.queue.all_rows() if row.status.value in ("PENDING", "RETRY")]
+        pending = [
+            row.url for row in self.queue.all_rows() if row.status.value in ("PENDING", "RETRY")
+        ]
         sweep_dead_urls(
             pending,
             head=head,
@@ -129,6 +155,32 @@ class Runner:
         )
 
     # -- per-URL -----------------------------------------------------------
+
+    def _process_guarded(self, queued: QueuedUrl) -> None:
+        """Run one URL so that no failure can abort the run or lose the URL.
+
+        Without this, an unexpected error (a malformed body crashing an
+        extractor, a disk error) propagates out of the loop: the run produces no
+        report at all and every claimed URL stays IN_PROGRESS. Here the URL gets
+        a real verdict instead, and the run continues.
+        """
+
+        try:
+            self._process(queued)
+        except Exception:
+            logger.exception("unhandled error while processing %s", queued.url)
+            self.queue.mark_failed(queued.url, verdict=Verdict.PARSE_FAIL.value)
+            self._results.append(Result(url=queued.url, verdict=Verdict.PARSE_FAIL))
+            self.metrics.observe(
+                Result(url=queued.url, verdict=Verdict.PARSE_FAIL), domain=_domain(queued.url)
+            )
+            self.alerter.send(
+                AlertEvent(
+                    kind="processing_error",
+                    message=f"unhandled error while processing {queued.url}",
+                    context={"url": queued.url},
+                )
+            )
 
     def _process(self, queued: QueuedUrl) -> None:
         url = queued.url
@@ -151,13 +203,16 @@ class Runner:
         self._results.append(result)
         last = result.attempts[-1] if result.attempts else None
         self.queue.log_attempt(
-            url, verdict=result.verdict.value,
+            url,
+            verdict=result.verdict.value,
             level=last.level.value if last else None,
             reason=last.reason if last else None,
         )
         self._route_verdict(queued, url_class, outcome)
 
-    def _route_verdict(self, queued: QueuedUrl, url_class: UrlClass, outcome) -> None:
+    def _route_verdict(
+        self, queued: QueuedUrl, url_class: UrlClass, outcome: GatewayOutcome
+    ) -> None:
         url = queued.url
         result = outcome.result
         verdict = result.verdict
@@ -165,7 +220,9 @@ class Runner:
         domain = _domain(url)
 
         if verdict is Verdict.DEAD_URL:
-            self.queue.quarantine_url(url, status_code=result.attempts[-1].status if result.attempts else None)
+            self.queue.quarantine_url(
+                url, status_code=result.attempts[-1].status if result.attempts else None
+            )
             self.metrics.observe(result, domain=domain)
             return
 
@@ -176,7 +233,9 @@ class Runner:
             return
 
         if verdict in _RETRY_BACKOFF:
-            self.queue.schedule_retry(url, verdict=verdict.value, delay_seconds=_RETRY_BACKOFF[verdict])
+            self.queue.schedule_retry(
+                url, verdict=verdict.value, delay_seconds=_RETRY_BACKOFF[verdict]
+            )
             self.metrics.observe(result, domain=domain)
             return
 
@@ -190,17 +249,33 @@ class Runner:
         if queued.attempts + 1 >= self.config.dead_zone_after_attempts:
             snapshot = outcome.snapshot_paths[-1] if outcome.snapshot_paths else None
             self.queue.mark_dead_zone(url, verdict_history=history, last_snapshot=snapshot)
-            self.alerter.send(AlertEvent(
-                kind="dead_zone", message=f"{url} unresolved by any free route",
-                context={"verdict": verdict.value, "history": history},
-            ))
+            self.alerter.send(
+                AlertEvent(
+                    kind="dead_zone",
+                    message=f"{url} unresolved by any free route",
+                    context={"verdict": verdict.value, "history": history},
+                )
+            )
         else:
             self.queue.mark_failed(url, verdict=verdict.value)
         self.metrics.observe(result, domain=domain)
 
-    def _handle_ok(self, queued: QueuedUrl, url_class: UrlClass, result: Result, response) -> None:
+    def _handle_ok(
+        self,
+        queued: QueuedUrl,
+        url_class: UrlClass,
+        result: Result,
+        response: RawResponse,
+    ) -> None:
         url = queued.url
-        changed, new_hash = self.freshness.record_result(url, headers=response.headers, body=response.body)
+        changed, new_hash = self.freshness.record_result(
+            url, headers=response.headers, body=response.body
+        )
+        if not changed:
+            # Fetched successfully but the content hash is identical: the
+            # conditional request did not save the download. Tracking this
+            # separates "we avoided a fetch" from "we paid for an unchanged page".
+            self.metrics.fetched_unchanged += 1
         natural_key = queued.natural_key or normalize_url(url)
 
         extractors = [dict(e) for e in url_class.extractors]
@@ -211,60 +286,87 @@ class Runner:
         conflicts = 0
         if url_class.quorum_fields:
             quorum = run_quorum(
-                response.body, extractors=extractors,
-                quorum_fields=list(url_class.quorum_fields), base_url=response.final_url,
+                response.body,
+                extractors=extractors,
+                quorum_fields=list(url_class.quorum_fields),
+                base_url=response.final_url,
             )
             conflicts = len(quorum.conflicts)
             if conflicts:
-                self.alerter.send(AlertEvent(
-                    kind="quorum_conflict", message=f"extractor disagreement on {url}",
-                    context={"fields": list(quorum.conflicts)},
-                ))
+                self.alerter.send(
+                    AlertEvent(
+                        kind="quorum_conflict",
+                        message=f"extractor disagreement on {url}",
+                        context={"fields": list(quorum.conflicts)},
+                    )
+                )
 
         self.dataset.stage(
-            natural_key, url=url, data=extraction.data,
-            content_hash=new_hash, conflict=bool(conflicts),
+            natural_key,
+            url=url,
+            data=extraction.data,
+            content_hash=new_hash,
+            conflict=bool(conflicts),
         )
         self.queue.mark_done(url, verdict="OK", content_hash=new_hash, natural_key=natural_key)
-        self.metrics.observe(result, extractor_sources=extraction.sources, conflicts=conflicts, domain=_domain(url))
+        self.metrics.observe(
+            result, extractor_sources=extraction.sources, conflicts=conflicts, domain=_domain(url)
+        )
 
     # -- finalize ----------------------------------------------------------
 
     def _promote(self) -> dict[str, Any] | None:
-        required = sorted({
-            f for cls in self.profile.url_classes.values()
-            for f in (cls.quorum_fields or cls.required_fields)
-        })
+        required = sorted(
+            {
+                f
+                for cls in self.profile.url_classes.values()
+                for f in (cls.quorum_fields or cls.required_fields)
+            }
+        )
         if not required:
             return None
         if not self.dataset.staged_rows():
             # Nothing changed this run (all fresh/unchanged): a no-op, not a failure.
             return {"ok": True, "reason": "no changes to promote", "staged": 0}
         min_completeness = min(
-            (float(cls.promote.get("min_completeness", 0.95)) for cls in self.profile.url_classes.values()),
+            (
+                float(cls.promote.get("min_completeness", 0.95))
+                for cls in self.profile.url_classes.values()
+            ),
             default=0.95,
         )
         max_growth = max(
-            (float(cls.promote.get("max_null_rate_growth", 2.0)) for cls in self.profile.url_classes.values()),
+            (
+                float(cls.promote.get("max_null_rate_growth", 2.0))
+                for cls in self.profile.url_classes.values()
+            ),
             default=2.0,
         )
         decision = self.dataset.promote(
-            required_fields=required, expected_count=None,
-            min_completeness=min_completeness, max_null_rate_growth=max_growth,
+            required_fields=required,
+            expected_count=None,
+            min_completeness=min_completeness,
+            max_null_rate_growth=max_growth,
         )
         if not decision.ok:
-            self.alerter.send(AlertEvent(
-                kind="promote_rejected", message="staging failed validation; clean dataset unchanged",
-                context={"reason": decision.reason, "completeness": decision.completeness},
-            ))
+            self.alerter.send(
+                AlertEvent(
+                    kind="promote_rejected",
+                    message="staging failed validation; clean dataset unchanged",
+                    context={"reason": decision.reason, "completeness": decision.completeness},
+                )
+            )
         return decision.to_dict()
 
     def _final_alerts(self, report: dict[str, Any], promote: dict[str, Any] | None) -> None:
         if report["dead_zone_urls"]:
-            self.alerter.send(AlertEvent(
-                kind="dead_zone", message=f"{len(report['dead_zone_urls'])} dead zone(s) need review",
-                context={"count": len(report["dead_zone_urls"])},
-            ))
+            self.alerter.send(
+                AlertEvent(
+                    kind="dead_zone",
+                    message=f"{len(report['dead_zone_urls'])} dead zone(s) need review",
+                    context={"count": len(report["dead_zone_urls"])},
+                )
+            )
 
 
 def _domain(url: str) -> str:

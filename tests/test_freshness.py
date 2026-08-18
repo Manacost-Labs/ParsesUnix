@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from web_scraper.freshness import FreshnessStore, content_hash  # noqa: E402
+from web_scraper.freshness import FreshnessStore, content_hash
 
 
 class ContentHashTests(unittest.TestCase):

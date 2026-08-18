@@ -9,10 +9,12 @@ from __future__ import annotations
 import html
 import re
 import unicodedata
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
+from typing import Any
 from urllib.parse import urljoin
 
 _WS_RE = re.compile(r"\s+")
-_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?)?")
 
 
 def normalize_text(value: str) -> str:
@@ -46,7 +48,32 @@ def normalize_url_value(value: str, base_url: str | None) -> str:
     return urljoin(base_url, text) if base_url else text
 
 
-def normalize_value(value, *, kind: str = "text", base_url: str | None = None):
+def normalize_date(value: str) -> str:
+    """Normalize a date to ISO-8601 with an explicit timezone where possible.
+
+    Two extractors reporting the same instant in different notations
+    (``2026-08-12T09:30:00Z`` vs ``Wed, 12 Aug 2026 09:30:00 GMT``) must compare
+    equal, or the quorum reports a false conflict. A value that parses as
+    neither ISO nor RFC 2822 is returned as cleaned text for the validator to
+    judge — it is never guessed at.
+    """
+
+    text = normalize_text(value)
+    if not text:
+        return text
+    candidate = text[:-1] + "+00:00" if text.endswith("Z") else text
+    for parse in (datetime.fromisoformat, parsedate_to_datetime):
+        try:
+            parsed = parse(candidate)
+        except (ValueError, TypeError):
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC).isoformat()
+    return text
+
+
+def normalize_value(value: Any, *, kind: str = "text", base_url: str | None = None) -> Any:
     """Normalize by declared field kind: text | number | url | date | raw."""
 
     if value is None:
@@ -61,7 +88,5 @@ def normalize_value(value, *, kind: str = "text", base_url: str | None = None):
     if kind == "url":
         return normalize_url_value(value, base_url)
     if kind == "date":
-        normalized = normalize_text(value)
-        match = _ISO_DATE_RE.match(normalized)
-        return normalized if match else normalized  # ISO kept; free-form left for the validator
+        return normalize_date(value)
     return normalize_text(value)

@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from web_scraper.fetchers import Pacer, RawResponse, SessionPool, parse_retry_after  # noqa: E402
+from web_scraper.fetchers import Pacer, RawResponse, SessionPool, parse_retry_after
 
 
 class CountingTransport:
@@ -76,7 +76,11 @@ class PacerTests(unittest.TestCase):
             clock_value[0] += seconds
 
         pacer = Pacer(
-            min_interval_s=2.0, jitter_s=0.0, sleep=sleep, clock=lambda: clock_value[0], rng=lambda: 0.0
+            min_interval_s=2.0,
+            jitter_s=0.0,
+            sleep=sleep,
+            clock=lambda: clock_value[0],
+            rng=lambda: 0.0,
         )
         self.assertEqual(pacer.pause("demo.example"), 0.0)  # first request: no wait
         clock_value[0] += 0.5
@@ -85,7 +89,13 @@ class PacerTests(unittest.TestCase):
 
     def test_domains_are_paced_independently(self) -> None:
         slept: list[float] = []
-        pacer = Pacer(min_interval_s=5.0, jitter_s=0.0, sleep=slept.append, clock=lambda: 100.0, rng=lambda: 0.0)
+        pacer = Pacer(
+            min_interval_s=5.0,
+            jitter_s=0.0,
+            sleep=slept.append,
+            clock=lambda: 100.0,
+            rng=lambda: 0.0,
+        )
         pacer.pause("a.example")
         self.assertEqual(pacer.pause("b.example"), 0.0)
         self.assertEqual(slept, [])
@@ -99,7 +109,11 @@ class PacerTests(unittest.TestCase):
             clock_value[0] += seconds
 
         pacer = Pacer(
-            min_interval_s=1.0, jitter_s=1.0, sleep=sleep, clock=lambda: clock_value[0], rng=lambda: 0.5
+            min_interval_s=1.0,
+            jitter_s=1.0,
+            sleep=sleep,
+            clock=lambda: clock_value[0],
+            rng=lambda: 0.5,
         )
         pacer.pause("demo.example")
         self.assertAlmostEqual(pacer.pause("demo.example"), 1.5)

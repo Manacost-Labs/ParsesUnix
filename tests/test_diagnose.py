@@ -11,10 +11,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from web_scraper.contracts import PAID_ESCALATION_VERDICTS  # noqa: E402
-from web_scraper.diagnose import diagnose_attempts, diagnose_queue  # noqa: E402
-from web_scraper.diagnose.cli import main as diagnose_main  # noqa: E402
-from web_scraper.queue import QueueStore  # noqa: E402
+from web_scraper.contracts import PAID_ESCALATION_VERDICTS
+from web_scraper.diagnose import diagnose_attempts, diagnose_queue
+from web_scraper.diagnose.cli import main as diagnose_main
+from web_scraper.queue import QueueStore
 
 
 def attempt(url, verdict, reason="", level="L1"):
@@ -23,10 +23,12 @@ def attempt(url, verdict, reason="", level="L1"):
 
 class GroupingTests(unittest.TestCase):
     def test_successes_are_not_failures(self) -> None:
-        diagnosis = diagnose_attempts([
-            attempt("https://x.example/1", "OK"),
-            attempt("https://x.example/2", "NOT_MODIFIED"),
-        ])
+        diagnosis = diagnose_attempts(
+            [
+                attempt("https://x.example/1", "OK"),
+                attempt("https://x.example/2", "NOT_MODIFIED"),
+            ]
+        )
         self.assertEqual(diagnosis.failures, 0)
         self.assertEqual(diagnosis.success_rate, 1.0)
         self.assertEqual(diagnosis.groups, ())
@@ -34,30 +36,39 @@ class GroupingTests(unittest.TestCase):
 
     def test_same_shape_different_numbers_group_together(self) -> None:
         # "HTTP 502" and "HTTP 503" are one operational group, not two.
-        diagnosis = diagnose_attempts([
-            attempt("https://x.example/1", "ORIGIN_DOWN", "target returned HTTP 502"),
-            attempt("https://x.example/2", "ORIGIN_DOWN", "target returned HTTP 503"),
-        ])
+        diagnosis = diagnose_attempts(
+            [
+                attempt("https://x.example/1", "ORIGIN_DOWN", "target returned HTTP 502"),
+                attempt("https://x.example/2", "ORIGIN_DOWN", "target returned HTTP 503"),
+            ]
+        )
         self.assertEqual(len(diagnosis.groups), 1)
         self.assertEqual(diagnosis.groups[0].count, 2)
 
     def test_groups_are_ordered_by_size_with_shares(self) -> None:
         records = (
             [attempt(f"https://x.example/o{i}", "ORIGIN_DOWN", "HTTP 502") for i in range(6)]
-            + [attempt(f"https://x.example/b{i}", "BLOCKED", "blocking signature") for i in range(3)]
+            + [
+                attempt(f"https://x.example/b{i}", "BLOCKED", "blocking signature")
+                for i in range(3)
+            ]
             + [attempt("https://x.example/p", "PARSE_FAIL", "canary missing")]
         )
         diagnosis = diagnose_attempts(records)
-        self.assertEqual([g.verdict for g in diagnosis.groups], ["ORIGIN_DOWN", "BLOCKED", "PARSE_FAIL"])
+        self.assertEqual(
+            [g.verdict for g in diagnosis.groups], ["ORIGIN_DOWN", "BLOCKED", "PARSE_FAIL"]
+        )
         self.assertAlmostEqual(diagnosis.groups[0].share, 0.6)
         self.assertAlmostEqual(sum(g.share for g in diagnosis.groups), 1.0)
 
     def test_failures_are_counted_per_domain(self) -> None:
-        diagnosis = diagnose_attempts([
-            attempt("https://a.example/1", "ORIGIN_DOWN"),
-            attempt("https://a.example/2", "ORIGIN_DOWN"),
-            attempt("https://b.example/1", "BLOCKED"),
-        ])
+        diagnosis = diagnose_attempts(
+            [
+                attempt("https://a.example/1", "ORIGIN_DOWN"),
+                attempt("https://a.example/2", "ORIGIN_DOWN"),
+                attempt("https://b.example/1", "BLOCKED"),
+            ]
+        )
         self.assertEqual(diagnosis.by_domain, {"a.example": 2, "b.example": 1})
 
 
@@ -78,9 +89,19 @@ class PolicyTests(unittest.TestCase):
 
     def test_only_block_verdicts_are_paid_eligible(self) -> None:
         eligible = set()
-        for verdict in ("OK", "DEAD_URL", "ORIGIN_DOWN", "RATE_LIMITED", "AUTH_REQUIRED",
-                        "ACCESS_DENIED", "BLOCKED", "SOFT_BLOCK", "THIN_CONTENT",
-                        "PROVIDER_ERROR", "PARSE_FAIL"):
+        for verdict in (
+            "OK",
+            "DEAD_URL",
+            "ORIGIN_DOWN",
+            "RATE_LIMITED",
+            "AUTH_REQUIRED",
+            "ACCESS_DENIED",
+            "BLOCKED",
+            "SOFT_BLOCK",
+            "THIN_CONTENT",
+            "PROVIDER_ERROR",
+            "PARSE_FAIL",
+        ):
             diagnosis = diagnose_attempts([attempt("https://x.example/1", verdict)])
             if diagnosis.groups and diagnosis.groups[0].may_escalate_to_paid:
                 eligible.add(verdict)
@@ -88,12 +109,14 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(eligible, {v.value for v in PAID_ESCALATION_VERDICTS})
 
     def test_paid_escalation_share_reflects_only_eligible_failures(self) -> None:
-        diagnosis = diagnose_attempts([
-            attempt("https://x.example/1", "ORIGIN_DOWN"),
-            attempt("https://x.example/2", "ORIGIN_DOWN"),
-            attempt("https://x.example/3", "BLOCKED"),
-            attempt("https://x.example/4", "SOFT_BLOCK"),
-        ])
+        diagnosis = diagnose_attempts(
+            [
+                attempt("https://x.example/1", "ORIGIN_DOWN"),
+                attempt("https://x.example/2", "ORIGIN_DOWN"),
+                attempt("https://x.example/3", "BLOCKED"),
+                attempt("https://x.example/4", "SOFT_BLOCK"),
+            ]
+        )
         self.assertAlmostEqual(diagnosis.paid_escalation_share, 0.5)
 
     def test_auth_required_advice_does_not_suggest_bypassing(self) -> None:
@@ -108,7 +131,9 @@ class QueueIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             queue = QueueStore(Path(tmp) / "queue.sqlite3")
             queue.add("https://x.example/a")
-            queue.log_attempt("https://x.example/a", verdict="ORIGIN_DOWN", level="L1", reason="HTTP 502")
+            queue.log_attempt(
+                "https://x.example/a", verdict="ORIGIN_DOWN", level="L1", reason="HTTP 502"
+            )
             queue.log_attempt("https://x.example/a", verdict="OK", level="L1", reason="passed")
             diagnosis = diagnose_queue(queue)
             self.assertEqual(diagnosis.total_attempts, 2)
@@ -126,10 +151,14 @@ class DiagnoseCliTests(unittest.TestCase):
     def test_json_output_from_attempts_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "attempts.json"
-            path.write_text(json.dumps([
-                attempt("https://x.example/1", "ORIGIN_DOWN", "HTTP 502"),
-                attempt("https://x.example/2", "BLOCKED", "blocking signature"),
-            ]))
+            path.write_text(
+                json.dumps(
+                    [
+                        attempt("https://x.example/1", "ORIGIN_DOWN", "HTTP 502"),
+                        attempt("https://x.example/2", "BLOCKED", "blocking signature"),
+                    ]
+                )
+            )
             code, out = self.run_cli(["--attempts-json", str(path), "--json"])
         self.assertEqual(code, 0)
         payload = json.loads(out)

@@ -7,30 +7,46 @@ unresolved/dead-zone URLs, with paid cost reported separately.
 
 from __future__ import annotations
 
+import logging
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from decimal import Decimal
-from typing import Any, Iterable
+from decimal import Decimal, InvalidOperation
+from typing import Any
 
 from web_scraper.contracts import Result, Verdict
+from web_scraper.observability.accounting import UrlAccounting
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
 class RunMetrics:
     """Mutable accumulator updated as each URL is processed."""
 
-    verdicts: Counter = field(default_factory=Counter)
-    by_level: Counter = field(default_factory=Counter)  # winning level for OK results
+    verdicts: Counter[str] = field(default_factory=Counter)
+    by_level: Counter[str] = field(default_factory=Counter)  # winning level for OK results
     fallbacks: int = 0  # OK results that did NOT resolve on the first route
-    extractor_sources: Counter = field(default_factory=Counter)
+    extractor_sources: Counter[str] = field(default_factory=Counter)
     quorum_conflicts: int = 0
-    fresh_unchanged: int = 0  # skipped or 304 — freshness win
+    fresh_unchanged: int = 0  # skipped or 304 — the download was avoided
+    #: Downloaded but byte-identical to the last run: a fetch that saved nothing.
+    fetched_unchanged: int = 0
     cost_credits: Decimal = Decimal("0")
     paid_calls: int = 0
-    per_domain: Counter = field(default_factory=Counter)
+    #: Paid attempts whose reported cost could not be parsed. Money that cannot be
+    #: attributed is under-counted spend, so it is surfaced rather than dropped.
+    unattributed_costs: int = 0
+    per_domain: Counter[str] = field(default_factory=Counter)
 
-    def observe(self, result: Result, *, extractor_sources: dict[str, str] | None = None,
-                conflicts: int = 0, domain: str | None = None) -> None:
+    def observe(
+        self,
+        result: Result,
+        *,
+        extractor_sources: dict[str, str] | None = None,
+        conflicts: int = 0,
+        domain: str | None = None,
+    ) -> None:
         self.verdicts[result.verdict.value] += 1
         if domain:
             self.per_domain[domain] += 1
@@ -45,8 +61,15 @@ class RunMetrics:
                 self.paid_calls += 1
                 try:
                     self.cost_credits += Decimal(str(attempt.cost_credits))
-                except Exception:
-                    pass
+                except (InvalidOperation, ValueError, TypeError):
+                    # Never silently drop spend: an unparseable cost is reported
+                    # so the total is known to be incomplete.
+                    self.unattributed_costs += 1
+                    logger.warning(
+                        "unparseable cost %r on a paid attempt for %s",
+                        attempt.cost_credits,
+                        attempt.url,
+                    )
         for source in (extractor_sources or {}).values():
             self.extractor_sources[source] += 1
         self.quorum_conflicts += conflicts
@@ -59,8 +82,10 @@ class RunMetrics:
             "extractor_sources": dict(self.extractor_sources),
             "quorum_conflicts": self.quorum_conflicts,
             "fresh_unchanged": self.fresh_unchanged,
+            "fetched_unchanged": self.fetched_unchanged,
             "cost_credits": str(self.cost_credits),
             "paid_calls": self.paid_calls,
+            "unattributed_costs": self.unattributed_costs,
             "per_domain": dict(self.per_domain),
         }
 
@@ -74,6 +99,8 @@ class RunReport:
     quarantined_urls: list[str]
     dead_zone_urls: list[str]
     promote: dict[str, Any] | None = None
+    #: The run-level ledger. A report without complete accounting is defective.
+    accounting: UrlAccounting | None = None
 
     @property
     def coverage(self) -> float:
@@ -89,6 +116,7 @@ class RunReport:
             "quarantined_urls": self.quarantined_urls,
             "dead_zone_urls": self.dead_zone_urls,
             "promote": self.promote,
+            "accounting": self.accounting.to_dict() if self.accounting else None,
         }
 
 
@@ -99,11 +127,13 @@ def build_report(
     quarantined_urls: list[str],
     dead_zone_urls: list[str],
     promote: dict[str, Any] | None = None,
+    accounting: UrlAccounting | None = None,
 ) -> RunReport:
     results = list(results)
     resolved = sum(1 for r in results if r.verdict in (Verdict.OK, Verdict.NOT_MODIFIED))
     unresolved = [
-        r.url for r in results
+        r.url
+        for r in results
         if r.verdict not in (Verdict.OK, Verdict.NOT_MODIFIED, Verdict.DEAD_URL)
     ]
     return RunReport(
@@ -114,4 +144,5 @@ def build_report(
         quarantined_urls=quarantined_urls,
         dead_zone_urls=dead_zone_urls,
         promote=promote,
+        accounting=accounting,
     )

@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from web_scraper.queue import QueueStore, UrlStatus, normalize_url  # noqa: E402
+from web_scraper.queue import QueueStore, UrlStatus, normalize_url
 
 
 class NormalizeTests(unittest.TestCase):
@@ -22,7 +22,9 @@ class NormalizeTests(unittest.TestCase):
         self.assertEqual(normalize_url("http://x.example:8080/p"), "http://x.example:8080/p")
 
     def test_distinct_resources_are_not_merged(self) -> None:
-        self.assertNotEqual(normalize_url("https://x.example/a"), normalize_url("https://x.example/b"))
+        self.assertNotEqual(
+            normalize_url("https://x.example/a"), normalize_url("https://x.example/b")
+        )
         self.assertNotEqual(
             normalize_url("https://x.example/p?id=1"), normalize_url("https://x.example/p?id=2")
         )
@@ -61,11 +63,15 @@ class QueueStoreTests(unittest.TestCase):
         self.q.add_many(["https://x.example/gone", "https://x.example/hard"])
         self.q.claim_batch(10)
         self.q.quarantine_url("https://x.example/gone", status_code=410)
-        self.q.mark_dead_zone("https://x.example/hard", verdict_history=["BLOCKED", "BLOCKED", "BLOCKED"])
+        self.q.mark_dead_zone(
+            "https://x.example/hard", verdict_history=["BLOCKED", "BLOCKED", "BLOCKED"]
+        )
         self.assertEqual(self.q.get("https://x.example/gone").status, UrlStatus.QUARANTINED)
         self.assertEqual(self.q.get("https://x.example/hard").status, UrlStatus.DEAD_ZONE)
         self.assertEqual(self.q.quarantined()[0]["last_status"], 410)
-        self.assertEqual(self.q.dead_zones()[0]["verdict_history"], ["BLOCKED", "BLOCKED", "BLOCKED"])
+        self.assertEqual(
+            self.q.dead_zones()[0]["verdict_history"], ["BLOCKED", "BLOCKED", "BLOCKED"]
+        )
 
     def test_retry_is_not_claimable_until_not_before(self) -> None:
         self.q.add("https://x.example/a")
@@ -89,7 +95,6 @@ class QueueStoreTests(unittest.TestCase):
         self.assertEqual(len(statuses), 5)
         self.assertNotIn(UrlStatus.IN_PROGRESS, set(statuses.values()))
 
-
     def test_reactivate_moves_done_back_to_pending(self) -> None:
         self.q.add("https://x.example/a")
         self.q.claim_batch(10)
@@ -98,6 +103,7 @@ class QueueStoreTests(unittest.TestCase):
         moved = self.q.reactivate(["https://x.example/a"])
         self.assertEqual(moved, 1)
         self.assertEqual(self.q.get("https://x.example/a").status, UrlStatus.PENDING)
+
 
 if __name__ == "__main__":
     unittest.main()

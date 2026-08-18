@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from web_scraper.contracts import ContentRules, TriageResult, Verdict
 
@@ -124,7 +125,9 @@ def classify_response(
     # A provider (L3/L4) failure must never be read with target semantics: a
     # provider-side 404/403/400 means "the provider could not serve the job",
     # not "the target URL is dead / access-controlled".
-    if source == "provider" and (status in {400, 401, 403, 404, 407, 429, 502, 510} or status >= 500):
+    if source == "provider" and (
+        status in {400, 401, 403, 404, 407, 429, 502, 510} or status >= 500
+    ):
         return TriageResult(
             Verdict.PROVIDER_ERROR,
             f"provider returned HTTP {status}",
@@ -145,11 +148,16 @@ def classify_response(
 
     if status == 304:
         return TriageResult(
-            Verdict.NOT_MODIFIED, "conditional request: content unchanged (HTTP 304)", status, len(payload)
+            Verdict.NOT_MODIFIED,
+            "conditional request: content unchanged (HTTP 304)",
+            status,
+            len(payload),
         )
 
     if status in {404, 410}:
-        return TriageResult(Verdict.DEAD_URL, f"target returned HTTP {status}", status, len(payload))
+        return TriageResult(
+            Verdict.DEAD_URL, f"target returned HTTP {status}", status, len(payload)
+        )
 
     if status in {401, 402}:
         return TriageResult(
@@ -162,7 +170,9 @@ def classify_response(
     if status == 429:
         retry_after = normalized_headers.get("retry-after")
         suffix = f"; Retry-After={retry_after}" if retry_after else ""
-        return TriageResult(Verdict.RATE_LIMITED, f"target rate limited{suffix}", status, len(payload))
+        return TriageResult(
+            Verdict.RATE_LIMITED, f"target rate limited{suffix}", status, len(payload)
+        )
 
     if status == 403:
         if signature:
@@ -202,7 +212,9 @@ def classify_response(
                 len(payload),
                 signature,
             )
-        return TriageResult(Verdict.ORIGIN_DOWN, f"target returned HTTP {status}", status, len(payload))
+        return TriageResult(
+            Verdict.ORIGIN_DOWN, f"target returned HTTP {status}", status, len(payload)
+        )
 
     if 200 <= status < 300:
         if signature:
@@ -258,7 +270,9 @@ def classify_response(
                     status,
                     len(payload),
                 )
-        return TriageResult(Verdict.OK, "status and content validation passed", status, len(payload))
+        return TriageResult(
+            Verdict.OK, "status and content validation passed", status, len(payload)
+        )
 
     if 300 <= status < 400:
         return TriageResult(

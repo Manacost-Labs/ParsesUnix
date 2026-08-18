@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from web_scraper.fetchers.base import Transport
+
+logger = logging.getLogger(__name__)
 
 
 class SessionPool:
@@ -42,7 +45,7 @@ class SessionPool:
                 try:
                     transport.fetch(warmup_url)
                 except Exception:
-                    pass  # warmup must never fail the real attempt
+                    logger.debug("session warmup failed for %s", domain, exc_info=True)
             self._sessions[domain] = (transport, now)
             return transport
 

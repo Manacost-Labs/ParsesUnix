@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 
 from web_scraper.contracts import ContentRules, Verdict
 from web_scraper.extract.chain import extract_fields
@@ -68,10 +69,9 @@ class RegressionReport:
 
     @property
     def severity(self) -> str:
-        levels = (
-            [change.severity for change in self.field_changes]
-            + [change.severity for change in self.structure_changes]
-        )
+        levels = [change.severity for change in self.field_changes] + [
+            change.severity for change in self.structure_changes
+        ]
         if SEVERITY_CRITICAL in levels:
             return SEVERITY_CRITICAL
         if SEVERITY_WARNING in levels:
@@ -318,7 +318,9 @@ def _diff_extraction(
         elif has and not had:
             changes.append(
                 FieldChange(
-                    field=field, kind="gained", after=after.data.get(field),
+                    field=field,
+                    kind="gained",
+                    after=after.data.get(field),
                     after_source=after.sources.get(field),
                 )
             )
@@ -329,17 +331,23 @@ def _diff_extraction(
                 # The field survived but is now coming from a less stable source.
                 changes.append(
                     FieldChange(
-                        field=field, kind="source_drift",
-                        before=before.data[field], after=after.data[field],
-                        before_source=before_source, after_source=after_source,
+                        field=field,
+                        kind="source_drift",
+                        before=before.data[field],
+                        after=after.data[field],
+                        before_source=before_source,
+                        after_source=after_source,
                     )
                 )
             elif before.data[field] != after.data[field]:
                 changes.append(
                     FieldChange(
-                        field=field, kind="value_changed",
-                        before=before.data[field], after=after.data[field],
-                        before_source=before_source, after_source=after_source,
+                        field=field,
+                        kind="value_changed",
+                        before=before.data[field],
+                        after=after.data[field],
+                        before_source=before_source,
+                        after_source=after_source,
                     )
                 )
     return changes
@@ -361,10 +369,10 @@ def _summarize(report: RegressionReport) -> str:
     if drift:
         parts.append(f"extractor source drift on {', '.join(drift)}")
     if not parts:
-        parts.append(f"{len(report.structure_changes)} structural change(s), fields still extracted")
-    hint = next(
-        (c.replacement_hint for c in report.structure_changes if c.replacement_hint), None
-    )
+        parts.append(
+            f"{len(report.structure_changes)} structural change(s), fields still extracted"
+        )
+    hint = next((c.replacement_hint for c in report.structure_changes if c.replacement_hint), None)
     if hint:
         parts.append(f"possible replacement: {hint}")
     return "; ".join(parts)

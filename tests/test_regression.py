@@ -11,9 +11,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from web_scraper.regression import compare_bodies, json_paths  # noqa: E402
-from web_scraper.regression.cli import main as regress_main  # noqa: E402
-from web_scraper.regression.detect import SEVERITY_CRITICAL, SEVERITY_NONE, SEVERITY_WARNING  # noqa: E402
+from web_scraper.regression import compare_bodies, json_paths
+from web_scraper.regression.cli import main as regress_main
+from web_scraper.regression.detect import (
+    SEVERITY_CRITICAL,
+    SEVERITY_NONE,
+    SEVERITY_WARNING,
+)
 
 HTML_HEADERS = {"Content-Type": "text/html"}
 JSON_HEADERS = {"Content-Type": "application/json"}
@@ -26,7 +30,7 @@ EXTRACTORS = [
 
 FILLER = b"<p>" + b"word " * 200 + b"</p>"
 BASELINE = (
-    b'<html><head><title>Page</title>'
+    b"<html><head><title>Page</title>"
     b'<script type="application/ld+json">{"@type":"Article","headline":"Real Title"}</script>'
     b'<link rel="canonical" href="https://x.example/a">'
     b"</head><body>" + b'<h1 class="t">Real Title</h1>' + FILLER + b"</body></html>"
@@ -69,10 +73,13 @@ class NoChangeTests(unittest.TestCase):
 class FieldRegressionTests(unittest.TestCase):
     def test_lost_field_is_critical(self) -> None:
         # Both the JSON-LD and the CSS anchor are gone: nothing can supply title.
-        current = BASELINE.replace(
-            b'<script type="application/ld+json">{"@type":"Article","headline":"Real Title"}</script>', b""
-        ).replace(b'<h1 class="t">Real Title</h1>', b'<div class="new">Real Title</div>').replace(
-            b"<title>Page</title>", b""
+        current = (
+            BASELINE.replace(
+                b'<script type="application/ld+json">{"@type":"Article","headline":"Real Title"}</script>',
+                b"",
+            )
+            .replace(b'<h1 class="t">Real Title</h1>', b'<div class="new">Real Title</div>')
+            .replace(b"<title>Page</title>", b"")
         )
         report = compare(current)
         self.assertEqual(report.severity, SEVERITY_CRITICAL)
@@ -83,7 +90,8 @@ class FieldRegressionTests(unittest.TestCase):
     def test_source_drift_is_a_warning_not_a_loss(self) -> None:
         # JSON-LD disappeared but the CSS selector still yields the value.
         current = BASELINE.replace(
-            b'<script type="application/ld+json">{"@type":"Article","headline":"Real Title"}</script>', b""
+            b'<script type="application/ld+json">{"@type":"Article","headline":"Real Title"}</script>',
+            b"",
         )
         report = compare(current)
         self.assertEqual(report.severity, SEVERITY_WARNING)
@@ -165,19 +173,36 @@ class RegressCliTests(unittest.TestCase):
         current = self.dir / "curr.json"
         baseline.write_text(json.dumps({"data": {"players": [{"name": "a"}]}}))
         current.write_text(json.dumps({"pageProps": {"players": [{"name": "a"}]}}))
-        code, out = self.run_cli([
-            "--baseline", str(baseline), "--current", str(current),
-            "--url", "https://x.example/api", "--content-type", "application/json", "--json",
-        ])
+        code, out = self.run_cli(
+            [
+                "--baseline",
+                str(baseline),
+                "--current",
+                str(current),
+                "--url",
+                "https://x.example/api",
+                "--content-type",
+                "application/json",
+                "--json",
+            ]
+        )
         self.assertEqual(code, 1)  # gates CI
         self.assertEqual(json.loads(out)["critical"], 1)
 
     def test_offline_mode_exits_zero_when_unchanged(self) -> None:
         body = self.dir / "b.html"
         body.write_bytes(BASELINE)
-        code, _out = self.run_cli([
-            "--baseline", str(body), "--current", str(body), "--url", "https://x.example/a", "--json",
-        ])
+        code, _out = self.run_cli(
+            [
+                "--baseline",
+                str(body),
+                "--current",
+                str(body),
+                "--url",
+                "https://x.example/a",
+                "--json",
+            ]
+        )
         self.assertEqual(code, 0)
 
     def test_text_output_names_the_replacement_hint(self) -> None:
@@ -185,10 +210,18 @@ class RegressCliTests(unittest.TestCase):
         current = self.dir / "curr.json"
         baseline.write_text(json.dumps({"data": {"players": [{"name": "a"}]}}))
         current.write_text(json.dumps({"pageProps": {"players": [{"name": "a"}]}}))
-        _code, out = self.run_cli([
-            "--baseline", str(baseline), "--current", str(current),
-            "--url", "https://x.example/api", "--content-type", "application/json",
-        ])
+        _code, out = self.run_cli(
+            [
+                "--baseline",
+                str(baseline),
+                "--current",
+                str(current),
+                "--url",
+                "https://x.example/api",
+                "--content-type",
+                "application/json",
+            ]
+        )
         self.assertIn("$pageProps.players[].name", out)
 
     def test_missing_current_is_a_usage_error(self) -> None:

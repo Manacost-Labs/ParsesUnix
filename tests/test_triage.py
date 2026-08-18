@@ -4,11 +4,10 @@ import sys
 import unittest
 from pathlib import Path
 
-
 SCRIPTS = Path(__file__).resolve().parents[1] / ".agents/skills/web-scraper/scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from triage import ContentRules, Verdict, classify_response  # noqa: E402
+from triage import ContentRules, Verdict, classify_response
 
 
 class TriageTests(unittest.TestCase):
@@ -71,7 +70,9 @@ class TriageTests(unittest.TestCase):
 
     def test_small_2xx_is_thin_content_not_paid_escalation(self) -> None:
         result = classify_response(
-            status=200, body='{"ok":true}', headers={"Content-Type": "application/json"},
+            status=200,
+            body='{"ok":true}',
+            headers={"Content-Type": "application/json"},
             rules=ContentRules(min_body_bytes=500),
         )
         self.assertEqual(result.verdict, Verdict.THIN_CONTENT)
@@ -85,19 +86,22 @@ class TriageTests(unittest.TestCase):
         result = classify_response(status=407)
         self.assertEqual(result.verdict, Verdict.PROVIDER_ERROR)
 
-
     def test_captcha_substring_in_markup_is_not_a_block(self) -> None:
         # A theme JS var like tds_captcha="" must not read as an anti-bot block.
-        body = 'x' * 400 + '<script>var tds_captcha="";</script>'
-        result = classify_response(status=200, body=body,
-                                   headers={"Content-Type": "text/html"},
-                                   rules=ContentRules(min_body_bytes=200))
+        body = "x" * 400 + '<script>var tds_captcha="";</script>'
+        result = classify_response(
+            status=200,
+            body=body,
+            headers={"Content-Type": "text/html"},
+            rules=ContentRules(min_body_bytes=200),
+        )
         self.assertNotEqual(result.verdict, Verdict.SOFT_BLOCK)
 
     def test_specific_captcha_vendor_marker_is_a_block(self) -> None:
-        body = 'blocked <script src="https://ct.captcha-delivery.com/c.js"></script>' + ' ' * 400
+        body = 'blocked <script src="https://ct.captcha-delivery.com/c.js"></script>' + " " * 400
         result = classify_response(status=200, body=body, headers={"Content-Type": "text/html"})
         self.assertEqual(result.verdict, Verdict.SOFT_BLOCK)
+
 
 if __name__ == "__main__":
     unittest.main()

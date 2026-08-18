@@ -6,8 +6,8 @@ import argparse
 import json
 import logging
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from web_scraper.observability.alerts import LoggingAlerter
 from web_scraper.profiles.model import ProfileError
@@ -45,7 +45,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     outcome = runner.run()
     payload = {"ok": True, "processed": outcome.processed, "report": outcome.report}
     if args.report:
-        args.report.write_text(json.dumps(payload["report"], ensure_ascii=False, indent=2), encoding="utf-8")
+        args.report.write_text(
+            json.dumps(payload["report"], ensure_ascii=False, indent=2), encoding="utf-8"
+        )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 

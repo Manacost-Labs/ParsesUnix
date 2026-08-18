@@ -10,14 +10,18 @@ being wired in, so until then they refuse loudly instead of guessing.
 from __future__ import annotations
 
 import http.cookiejar
+import logging
 import socket
 import time
-from typing import Mapping
+from collections.abc import Mapping
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPCookieProcessor, Request
 
 from web_scraper.fetchers.base import RawResponse, TransportUnavailable
 from web_scraper.probe.safety import Resolver, build_safe_opener, is_public_url, validate_public_url
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_USER_AGENT = "WebScraperSkill/0.2 (+authorized collection)"
 DEFAULT_MAX_BODY_BYTES = 2_000_000
@@ -36,7 +40,7 @@ def _close_quietly(*objects: object) -> None:
         try:
             closer()
         except Exception:
-            pass
+            logger.debug("failed to close %r", obj, exc_info=True)
 
 
 def _module_available(name: str) -> bool:
@@ -73,9 +77,7 @@ class UrllibTransport:
         self.timeout = timeout
         self.max_body_bytes = max_body_bytes
         self.user_agent = user_agent
-        cookie_processor = (
-            HTTPCookieProcessor(http.cookiejar.CookieJar()) if use_cookies else None
-        )
+        cookie_processor = HTTPCookieProcessor(http.cookiejar.CookieJar()) if use_cookies else None
         self._opener = build_safe_opener(
             allow_private=allow_private, resolver=resolver, cookie_processor=cookie_processor
         )
@@ -94,7 +96,7 @@ class UrllibTransport:
                 validate_public_url(
                     response.geturl(), allow_private=self.allow_private, resolver=self.resolver
                 )
-                return response.status
+                return int(response.status)
         except HTTPError as exc:
             return exc.code
         except (URLError, TimeoutError, OSError):
@@ -120,7 +122,9 @@ class UrllibTransport:
             with self._opener.open(request, timeout=self.timeout) as response:
                 status = response.status
                 final_url = response.geturl()
-                validate_public_url(final_url, allow_private=self.allow_private, resolver=self.resolver)
+                validate_public_url(
+                    final_url, allow_private=self.allow_private, resolver=self.resolver
+                )
                 raw_headers = dict(response.headers.items())
                 body = response.read(self.max_body_bytes + 1)
         except HTTPError as exc:
@@ -164,10 +168,12 @@ class PlaywrightRenderTransport:
         self.timeout = timeout
         self.headless = headless
 
-    def _guard_route(self, route) -> None:  # pragma: no cover - needs a live browser
+    def _guard_route(self, route: Any) -> None:  # pragma: no cover - needs a live browser
         # Abort any request (navigation or subresource) to a non-public host, so
         # a rendered page cannot drive the browser to internal/metadata targets.
-        if is_public_url(route.request.url, allow_private=self.allow_private, resolver=self.resolver):
+        if is_public_url(
+            route.request.url, allow_private=self.allow_private, resolver=self.resolver
+        ):
             route.continue_()
         else:
             route.abort()
@@ -196,7 +202,7 @@ class PlaywrightRenderTransport:
             try:
                 page.wait_for_load_state("networkidle", timeout=self.timeout * 1000)
             except Exception:
-                pass  # render whatever settled before the timeout
+                logger.debug("networkidle not reached for %s", url, exc_info=True)
             html = page.content()
             status = response.status if response else None
             raw_headers = dict(response.headers) if response else {}

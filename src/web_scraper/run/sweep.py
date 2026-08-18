@@ -7,8 +7,8 @@ URLs, so the sweep must run before any L3/L4 adapter is enabled.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Callable, Iterable
 
 DEAD_STATUSES = frozenset({404, 410})
 
@@ -22,14 +22,16 @@ class SweepResult:
     inconclusive: int  # HEAD not honored / network error — left for the main pass
 
 
-def sweep_dead_urls(urls: Iterable[str], *, head: HeadFn, quarantine: Callable[[str, int], None]) -> SweepResult:
+def sweep_dead_urls(
+    urls: Iterable[str], *, head: HeadFn, quarantine: Callable[[str, int], None]
+) -> SweepResult:
     checked = inconclusive = 0
     quarantined: list[str] = []
     for url in urls:
         checked += 1
         status = head(url)
         if status in DEAD_STATUSES:
-            quarantine(url, status)  # type: ignore[arg-type]
+            quarantine(url, status)
             quarantined.append(url)
         elif status is None or status == 405:  # HEAD unsupported or transient
             inconclusive += 1

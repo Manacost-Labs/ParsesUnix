@@ -19,16 +19,17 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from collections.abc import Callable, Iterable, Sequence
 from contextlib import closing
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any
 
 from web_scraper.queue.normalize import normalize_url
 
 
-class UrlStatus(str, Enum):
+class UrlStatus(StrEnum):
     PENDING = "PENDING"
     IN_PROGRESS = "IN_PROGRESS"
     DONE = "DONE"
@@ -54,7 +55,7 @@ class QueuedUrl:
     updated_at: float
 
     @classmethod
-    def from_row(cls, row: sqlite3.Row) -> "QueuedUrl":
+    def from_row(cls, row: sqlite3.Row) -> QueuedUrl:
         return cls(
             url=row["url"],
             url_class=row["url_class"],
@@ -130,7 +131,9 @@ class QueueStore:
 
     # -- enqueue -----------------------------------------------------------
 
-    def add(self, url: str, *, url_class: str | None = None, natural_key: str | None = None) -> bool:
+    def add(
+        self, url: str, *, url_class: str | None = None, natural_key: str | None = None
+    ) -> bool:
         """Add one URL. Returns True if newly inserted, False if already present."""
 
         normalized = normalize_url(url)
@@ -325,9 +328,7 @@ class QueueStore:
 
     def get(self, url: str) -> QueuedUrl | None:
         with closing(self._connect()) as conn:
-            row = conn.execute(
-                "SELECT * FROM urls WHERE url = ?", (normalize_url(url),)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM urls WHERE url = ?", (normalize_url(url),)).fetchone()
         return QueuedUrl.from_row(row) if row else None
 
     def counts_by_status(self) -> dict[str, int]:

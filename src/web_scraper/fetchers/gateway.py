@@ -21,8 +21,9 @@ from __future__ import annotations
 import re
 import socket
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import urlsplit
 
 from web_scraper.contracts import (
@@ -41,13 +42,12 @@ from web_scraper.fetchers.base import RawResponse, Transport, TransportUnavailab
 from web_scraper.fetchers.circuit import CircuitBreaker
 from web_scraper.fetchers.pacing import Pacer, parse_retry_after
 from web_scraper.fetchers.sessions import SessionPool
-from web_scraper.probe.safety import UnsafeTarget
 from web_scraper.fetchers.transports import (
     PlaywrightRenderTransport,
     ScraplingStealthyTransport,
     UrllibTransport,
 )
-from web_scraper.probe.safety import Resolver
+from web_scraper.probe.safety import Resolver, UnsafeTarget
 from web_scraper.profiles.model import SiteProfile, UrlClass
 from web_scraper.storage.snapshots import SnapshotStore
 from web_scraper.triage import classify_response
@@ -142,7 +142,7 @@ def default_transport_provider(
 class GatewayOutcome:
     result: Result
     response: RawResponse | None
-    skipped_routes: tuple[dict, ...]
+    skipped_routes: tuple[dict[str, Any], ...]
     snapshot_paths: tuple[str, ...]
 
     @property
@@ -201,7 +201,7 @@ class FetchGateway:
             )
 
         attempts: list[Attempt] = []
-        skipped: list[dict] = []
+        skipped: list[dict[str, Any]] = []
         snapshot_paths: list[str] = []
         final_verdict: Verdict | None = None
         final_response: RawResponse | None = None
@@ -295,12 +295,13 @@ class FetchGateway:
             snapshot_paths=tuple(snapshot_paths),
         )
 
-    def _plan_routes(self, url_class: UrlClass, skipped: list[dict]) -> list[Route]:
+    def _plan_routes(self, url_class: UrlClass, skipped: list[dict[str, Any]]) -> list[Route]:
         """Primary first, then alternatives cheapest-first; paid routes are reported, never run."""
 
-        ordered = [url_class.primary_route] + sorted(
-            url_class.alternative_routes, key=lambda route: route.level.rank
-        )
+        ordered = [
+            url_class.primary_route,
+            *sorted(url_class.alternative_routes, key=lambda route: route.level.rank),
+        ]
         plan: list[Route] = []
         seen: set[tuple[str, str, str | None]] = set()
         for route in ordered:

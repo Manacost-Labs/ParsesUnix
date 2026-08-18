@@ -10,12 +10,17 @@ from urllib.request import Request
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from web_scraper.probe import PROBE_REPORT_SCHEMA, FetchResult, UnsafeTarget, probe  # noqa: E402
-from web_scraper.probe import analysis  # noqa: E402
-from web_scraper.probe.safety import ValidatingRedirectHandler  # noqa: E402
-from web_scraper.profiles import parse_profile  # noqa: E402
-from web_scraper.profiles.draft import draft_profile_from_probe, merge_api_candidate  # noqa: E402
-from web_scraper.storage import load_saved_response  # noqa: E402
+from web_scraper.probe import (
+    PROBE_REPORT_SCHEMA,
+    FetchResult,
+    UnsafeTarget,
+    analysis,
+    probe,
+)
+from web_scraper.probe.safety import ValidatingRedirectHandler
+from web_scraper.profiles import parse_profile
+from web_scraper.profiles.draft import draft_profile_from_probe, merge_api_candidate
+from web_scraper.storage import load_saved_response
 
 FIXTURES = ROOT / "tests" / "fixtures"
 
@@ -70,7 +75,9 @@ class AnalysisTests(unittest.TestCase):
         )
         self.assertEqual(discovery["opengraph"].get("og:title"), "Solar farm opens near Riverton")
         self.assertEqual(len(discovery["alternates"]["rss_atom"]), 1)
-        self.assertTrue(discovery["alternates"]["amp_url"].startswith("https://demo-news.example/amp/"))
+        self.assertTrue(
+            discovery["alternates"]["amp_url"].startswith("https://demo-news.example/amp/")
+        )
 
     def test_success_page_is_ssr(self) -> None:
         saved = load_saved_response(FIXTURES / "success")
@@ -95,8 +102,9 @@ class AnalysisTests(unittest.TestCase):
 
     def test_next_data_page_is_hybrid(self) -> None:
         body = (
-            b"<html><head></head><body><main>" + b"word " * 200 +
-            b'</main><script id="__NEXT_DATA__" type="application/json">{"props":{}}</script></body></html>'
+            b"<html><head></head><body><main>"
+            + b"word " * 200
+            + b'</main><script id="__NEXT_DATA__" type="application/json">{"props":{}}</script></body></html>'
         )
         app_state = analysis.extract_app_state(body.decode())
         self.assertTrue(app_state["next_data"])
@@ -122,12 +130,16 @@ class RedirectSafetyTests(unittest.TestCase):
     def test_allowed_redirect_is_recorded_in_chain(self) -> None:
         handler = ValidatingRedirectHandler(allow_private=False, resolver=PUBLIC_RESOLVER)
         request = Request("https://public.example/start")
-        handler.redirect_request(
-            request, None, 301, "Moved", {}, "https://public.example/final"
-        )
+        handler.redirect_request(request, None, 301, "Moved", {}, "https://public.example/final")
         self.assertEqual(
             handler.chain,
-            [{"from": "https://public.example/start", "to": "https://public.example/final", "status": 301}],
+            [
+                {
+                    "from": "https://public.example/start",
+                    "to": "https://public.example/final",
+                    "status": 301,
+                }
+            ],
         )
 
 
@@ -203,7 +215,9 @@ class DraftProfileTests(unittest.TestCase):
     def build_report(self, scenario: str):
         page = fixture_fetch_result(scenario)
         fetch = make_fetch({page.requested_url: page})
-        return probe(page.requested_url, fetch=fetch, resolver=PUBLIC_RESOLVER, include_robots=False)
+        return probe(
+            page.requested_url, fetch=fetch, resolver=PUBLIC_RESOLVER, include_robots=False
+        )
 
     def test_draft_from_success_report_is_valid(self) -> None:
         report = self.build_report("success")
@@ -218,8 +232,8 @@ class DraftProfileTests(unittest.TestCase):
         self.assertIn("meta", kinds)
 
     def test_draft_fails_closed_until_canary_is_set(self) -> None:
-        from web_scraper.triage import classify_response
         from web_scraper.contracts import Verdict
+        from web_scraper.triage import classify_response
 
         report = self.build_report("success")
         draft = draft_profile_from_probe(report, url_class="article", required_fields=("title",))
@@ -242,7 +256,13 @@ class DraftProfileTests(unittest.TestCase):
     def test_browser_candidate_promotes_csr_draft_to_l0(self) -> None:
         report = self.build_report("csr-shell")
         draft = draft_profile_from_probe(report, url_class="catalog")
-        candidate = {"route": {"type": "json_api", "level": "L0", "url": "https://demo-store.example/api/catalog?page=1"}}
+        candidate = {
+            "route": {
+                "type": "json_api",
+                "level": "L0",
+                "url": "https://demo-store.example/api/catalog?page=1",
+            }
+        }
         merged = merge_api_candidate(draft, "catalog", candidate)
         profile = parse_profile(merged)
         catalog = profile.url_classes["catalog"]
@@ -261,14 +281,20 @@ class ApiHintSafetyTests(unittest.TestCase):
         self.assertEqual(hints["urls"], ["https://demo.example/api/v1/items"])
 
     def test_third_party_hint_is_dropped(self) -> None:
-        hints = analysis.extract_api_hints('src="//cdn.other.com/api/data"', "https://demo.example/p")
+        hints = analysis.extract_api_hints(
+            'src="//cdn.other.com/api/data"', "https://demo.example/p"
+        )
         self.assertEqual(hints["urls"], [])
 
     def test_query_string_is_stripped_from_hint(self) -> None:
-        hints = analysis.extract_api_hints('u="/api/items?api_key=SECRET"', "https://demo.example/p")
+        hints = analysis.extract_api_hints(
+            'u="/api/items?api_key=SECRET"', "https://demo.example/p"
+        )
         self.assertEqual(hints["urls"], ["https://demo.example/api/items"])
         self.assertNotIn("SECRET", str(hints))
 
     def test_subdomain_of_site_is_kept(self) -> None:
-        hints = analysis.extract_api_hints('u="https://api.demo.example/api/x"', "https://demo.example/p")
+        hints = analysis.extract_api_hints(
+            'u="https://api.demo.example/api/x"', "https://demo.example/p"
+        )
         self.assertEqual(hints["urls"], ["https://api.demo.example/api/x"])

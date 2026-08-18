@@ -6,10 +6,10 @@ import hashlib
 import re
 import sqlite3
 import time
+from collections.abc import Callable, Mapping
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Mapping
 
 _WS_RE = re.compile(rb"\s+")
 
@@ -63,9 +63,13 @@ class FreshnessStore:
         if not row:
             return None
         return FreshnessRecord(
-            url=row["url"], etag=row["etag"], last_modified=row["last_modified"],
-            content_hash=row["content_hash"], last_checked=row["last_checked"],
-            last_changed=row["last_changed"], interval_seconds=row["interval_seconds"],
+            url=row["url"],
+            etag=row["etag"],
+            last_modified=row["last_modified"],
+            content_hash=row["content_hash"],
+            last_checked=row["last_checked"],
+            last_changed=row["last_changed"],
+            interval_seconds=row["interval_seconds"],
         )
 
     def conditional_headers(self, url: str) -> dict[str, str]:

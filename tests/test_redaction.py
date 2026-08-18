@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from web_scraper.storage.redaction import (  # noqa: E402
+from web_scraper.storage.redaction import (
     REDACTED,
     redact_body,
     redact_headers,
@@ -45,7 +45,13 @@ class RedactBodyTests(unittest.TestCase):
 
 class RedactHeadersTests(unittest.TestCase):
     def test_expanded_sensitive_set(self) -> None:
-        out = redact_headers({"WWW-Authenticate": "Basic realm=x", "X-Goog-Api-Key": "k", "Content-Type": "text/html"})
+        out = redact_headers(
+            {
+                "WWW-Authenticate": "Basic realm=x",
+                "X-Goog-Api-Key": "k",
+                "Content-Type": "text/html",
+            }
+        )
         self.assertEqual(out["WWW-Authenticate"], REDACTED)
         self.assertEqual(out["X-Goog-Api-Key"], REDACTED)
         self.assertEqual(out["Content-Type"], "text/html")

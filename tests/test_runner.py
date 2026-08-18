@@ -8,12 +8,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from web_scraper.contracts import Verdict  # noqa: E402
-from web_scraper.fetchers import FetchGateway, Pacer, RawResponse  # noqa: E402
-from web_scraper.profiles import parse_profile  # noqa: E402
-from web_scraper.queue import UrlStatus  # noqa: E402
-from web_scraper.run import RunConfig, Runner  # noqa: E402
-from web_scraper.storage import load_saved_response  # noqa: E402
+from web_scraper.fetchers import FetchGateway, Pacer, RawResponse
+from web_scraper.profiles import parse_profile
+from web_scraper.queue import UrlStatus
+from web_scraper.run import RunConfig, Runner
+from web_scraper.storage import load_saved_response
 
 FIXTURES = ROOT / "tests" / "fixtures"
 
@@ -25,8 +24,12 @@ BLOCKED = "https://demo-news.example/articles/blocked-story"
 def raw_from_fixture(scenario: str, url: str) -> RawResponse:
     saved = load_saved_response(FIXTURES / scenario)
     return RawResponse(
-        requested_url=url, final_url=url, status=saved.status,
-        headers=saved.headers, body=saved.body, elapsed_ms=5,
+        requested_url=url,
+        final_url=url,
+        status=saved.status,
+        headers=saved.headers,
+        body=saved.body,
+        elapsed_ms=5,
     )
 
 
@@ -34,30 +37,42 @@ class NoWaitPacer(Pacer):
     def __init__(self) -> None:
         super().__init__(min_interval_s=0, jitter_s=0, sleep=lambda _s: None)
 
-    def pause(self, domain): return 0.0
-    def backoff(self, seconds): return seconds
+    def pause(self, domain):
+        return 0.0
+
+    def backoff(self, seconds):
+        return seconds
 
 
 def make_profile():
-    return parse_profile({
-        "site": "demo-news.example",
-        "authorization": {"public_data_only": True},
-        "url_classes": {
-            "article": {
-                "match": "^https://demo-news\\.example/articles/",
-                "expected_content_type": "html",
-                "validation": {"min_body_bytes": 300, "canary": "<article",
-                               "required_fields": ["title", "published_at"]},
-                "routes": {"primary": {"type": "direct_http", "level": "L1"},
-                           "alternatives": [{"type": "dynamic", "level": "L2"}]},
-                "extractors": [{"kind": "json_ld", "schema_type": "Article"},
-                               {"kind": "heuristic"}],
-                "quorum_fields": ["title", "published_at"],
-                "retry": {"max_attempts": 1, "backoff_seconds": 0},
-                "promote": {"min_completeness": 0.95, "max_null_rate_growth": 2.0},
-            }
-        },
-    })
+    return parse_profile(
+        {
+            "site": "demo-news.example",
+            "authorization": {"public_data_only": True},
+            "url_classes": {
+                "article": {
+                    "match": "^https://demo-news\\.example/articles/",
+                    "expected_content_type": "html",
+                    "validation": {
+                        "min_body_bytes": 300,
+                        "canary": "<article",
+                        "required_fields": ["title", "published_at"],
+                    },
+                    "routes": {
+                        "primary": {"type": "direct_http", "level": "L1"},
+                        "alternatives": [{"type": "dynamic", "level": "L2"}],
+                    },
+                    "extractors": [
+                        {"kind": "json_ld", "schema_type": "Article"},
+                        {"kind": "heuristic"},
+                    ],
+                    "quorum_fields": ["title", "published_at"],
+                    "retry": {"max_attempts": 1, "backoff_seconds": 0},
+                    "promote": {"min_completeness": 0.95, "max_null_rate_growth": 2.0},
+                }
+            },
+        }
+    )
 
 
 class RunnerTests(unittest.TestCase):
@@ -122,7 +137,7 @@ class RunnerTests(unittest.TestCase):
         runner.queue.claim_batch(10)
         # A fresh runner resumes: the stale IN_PROGRESS row returns to PENDING.
         runner2 = self.build_runner(responses, [])
-        result = runner2.run()
+        runner2.run()
         self.assertEqual(runner2.queue.get(SUCCESS).status, UrlStatus.DONE)
 
 

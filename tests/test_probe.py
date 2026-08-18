@@ -4,11 +4,10 @@ import sys
 import unittest
 from pathlib import Path
 
-
 SCRIPTS = Path(__file__).resolve().parents[1] / ".agents/skills/web-scraper/scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from probe import UnsafeTarget, validate_public_url  # noqa: E402
+from probe import UnsafeTarget, validate_public_url
 
 
 class ProbeSafetyTests(unittest.TestCase):
@@ -30,4 +29,3 @@ class ProbeSafetyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

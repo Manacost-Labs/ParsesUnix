@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from web_scraper.storage import iter_saved_responses  # noqa: E402
+from web_scraper.storage import iter_saved_responses
 
 FIXTURES = ROOT / "tests" / "fixtures"
 EXPECTED_SCENARIOS = {
@@ -42,7 +42,13 @@ class FixtureVerdictTests(unittest.TestCase):
     def test_no_free_verdict_ever_escalates_to_paid(self) -> None:
         for saved in iter_saved_responses(FIXTURES):
             result = saved.triage()
-            if result.verdict.value in {"DEAD_URL", "RATE_LIMITED", "ORIGIN_DOWN", "PARSE_FAIL", "ACCESS_DENIED"}:
+            if result.verdict.value in {
+                "DEAD_URL",
+                "RATE_LIMITED",
+                "ORIGIN_DOWN",
+                "PARSE_FAIL",
+                "ACCESS_DENIED",
+            }:
                 self.assertFalse(result.paid_escalation_allowed, saved.name)
 
 

@@ -21,7 +21,9 @@ CLAUDE_SKILLS = ROOT / ".claude" / "skills"
 #: Skills authored in this repository (the rest are vendored, see THIRD_PARTY.md).
 OWN_SKILLS = {"web-scraper", "scraper-regression", "scraper-debugger"}
 
-_LINK_RE = re.compile(r"\]\((?!https?:|#|mailto:)([A-Za-z0-9_./-]+\.(?:md|py|sh|ts|yaml|yml|json))\)")
+_LINK_RE = re.compile(
+    r"\]\((?!https?:|#|mailto:)([A-Za-z0-9_./-]+\.(?:md|py|sh|ts|yaml|yml|json))\)"
+)
 _NAME_RE = re.compile(r'^name:\s*"?([A-Za-z0-9_-]+)"?\s*$', re.MULTILINE)
 _DESC_RE = re.compile(r"^description:\s*\S", re.MULTILINE)
 
@@ -43,7 +45,7 @@ class SkillLayoutTests(unittest.TestCase):
 
     def test_own_skills_are_present(self) -> None:
         names = {path.name for path in skill_dirs()}
-        self.assertTrue(OWN_SKILLS <= names, f"missing own skills: {OWN_SKILLS - names}")
+        self.assertTrue(names >= OWN_SKILLS, f"missing own skills: {OWN_SKILLS - names}")
 
     def test_every_agent_skill_is_symlinked_for_claude(self) -> None:
         for skill in skill_dirs():

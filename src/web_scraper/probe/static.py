@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import hashlib
 import socket
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from functools import partial
-from typing import Any, Callable
+from typing import Any
 from urllib import robotparser
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit
@@ -39,7 +40,7 @@ class FetchResult:
     headers: dict[str, str]
     body: bytes
     truncated: bool
-    redirect_chain: tuple[dict, ...]
+    redirect_chain: tuple[dict[str, Any], ...]
     transport_error: str | None = None
 
 
@@ -54,7 +55,7 @@ def default_fetch(
     max_body_bytes: int = MAX_BODY_BYTES,
     timeout: float = 20.0,
 ) -> FetchResult:
-    chain: list[dict] = []
+    chain: list[dict[str, Any]] = []
     opener = build_safe_opener(allow_private=allow_private, resolver=resolver, chain=chain)
     # No Range header: a server honoring Range returns exactly the requested
     # window, which would make every response look complete. Reading one byte
@@ -161,7 +162,7 @@ class ProbeReport:
     status: int | None
     verdict: str
     reason: str
-    redirect_chain: tuple[dict, ...]
+    redirect_chain: tuple[dict[str, Any], ...]
     headers: dict[str, str]
     fetch: dict[str, Any]
     robots: dict[str, Any]

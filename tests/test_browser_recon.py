@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from web_scraper.probe.browser import (  # noqa: E402
+from web_scraper.probe.browser import (
     BROWSER_RECON_SCHEMA,
     BrowserUnavailable,
     CapturedResponse,
@@ -56,9 +56,13 @@ class FieldMatchTests(unittest.TestCase):
         self.assertEqual(found["published_at"], ["data.items[].publishedAt"])
 
     def test_ranking_prefers_responses_with_more_target_fields(self) -> None:
-        rich = capture("https://demo-store.example/api/catalog", {"items": [{"title": "A", "price": 10}]})
+        rich = capture(
+            "https://demo-store.example/api/catalog", {"items": [{"title": "A", "price": 10}]}
+        )
         poor = capture("https://demo-store.example/api/suggest", {"title": "only"})
-        third_party = capture("https://analytics.example/collect", {"title": "x", "price": 1}, same_site=False)
+        third_party = capture(
+            "https://analytics.example/collect", {"title": "x", "price": 1}, same_site=False
+        )
         not_json = CapturedResponse(
             url="https://demo-store.example/api/blob",
             method="GET",
@@ -71,27 +75,39 @@ class FieldMatchTests(unittest.TestCase):
         )
         candidates = extract_candidates([poor, third_party, rich, not_json], ["title", "price"])
         self.assertEqual(candidates[0].url, "https://demo-store.example/api/catalog")
-        self.assertTrue(candidates[0].route == {
-            "type": "json_api",
-            "level": "L0",
-            "url": "https://demo-store.example/api/catalog",
-            "source": "browser-recon",
-        })
-        self.assertEqual([c.url for c in candidates[1:]], [
-            "https://analytics.example/collect",
-            "https://demo-store.example/api/suggest",
-        ])
+        self.assertTrue(
+            candidates[0].route
+            == {
+                "type": "json_api",
+                "level": "L0",
+                "url": "https://demo-store.example/api/catalog",
+                "source": "browser-recon",
+            }
+        )
+        self.assertEqual(
+            [c.url for c in candidates[1:]],
+            [
+                "https://analytics.example/collect",
+                "https://demo-store.example/api/suggest",
+            ],
+        )
 
 
 class GateTests(unittest.TestCase):
     def test_ssr_report_skips_browser(self) -> None:
-        report = {"rendering": {"classification": "ssr"}, "recommendation": {"needs_browser_recon": False}}
+        report = {
+            "rendering": {"classification": "ssr"},
+            "recommendation": {"needs_browser_recon": False},
+        }
         run, reason = should_run_browser(report)
         self.assertFalse(run)
         self.assertIn("ssr", reason)
 
     def test_csr_report_runs_browser(self) -> None:
-        report = {"rendering": {"classification": "csr"}, "recommendation": {"needs_browser_recon": True}}
+        report = {
+            "rendering": {"classification": "csr"},
+            "recommendation": {"needs_browser_recon": True},
+        }
         run, _ = should_run_browser(report)
         self.assertTrue(run)
 
@@ -100,9 +116,15 @@ class GateTests(unittest.TestCase):
             browser_recon("https://1.1.1.1/", target_fields=["title"], resolver=PUBLIC_RESOLVER)
 
     def test_recon_skips_ssr_without_needing_playwright(self) -> None:
-        report = {"rendering": {"classification": "ssr"}, "recommendation": {"needs_browser_recon": False}}
+        report = {
+            "rendering": {"classification": "ssr"},
+            "recommendation": {"needs_browser_recon": False},
+        }
         recon = browser_recon(
-            "https://1.1.1.1/", target_fields=["title"], static_report=report, resolver=PUBLIC_RESOLVER
+            "https://1.1.1.1/",
+            target_fields=["title"],
+            static_report=report,
+            resolver=PUBLIC_RESOLVER,
         )
         self.assertEqual(recon.schema, BROWSER_RECON_SCHEMA)
         self.assertFalse(recon.executed)

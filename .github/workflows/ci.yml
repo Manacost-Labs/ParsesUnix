@@ -7,6 +7,23 @@ on:
     branches: [main]
 
 jobs:
+  quality:
+    name: ruff + mypy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install the package with dev tooling
+        run: python -m pip install -e '.[dev]'
+      - name: Ruff lint
+        run: ruff check src tests tools
+      - name: Ruff format
+        run: ruff format --check src tests tools
+      - name: mypy (strict, package scope)
+        run: mypy
+
   tests:
     name: unittest (stdlib only)
     runs-on: ubuntu-latest

@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, TypeGuard
 from urllib.parse import urlsplit
 
 from web_scraper.contracts import ContentRules, Level, Route, RouteType
@@ -81,7 +82,7 @@ class _Ctx:
         self.errors.append(f"{path}: {message}")
 
 
-def _is_number(value: Any) -> bool:
+def _is_number(value: Any) -> TypeGuard[float]:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
@@ -97,7 +98,9 @@ def scan_for_secrets(value: Any, path: str, ctx: _Ctx) -> None:
             # The top-level ``authorization`` policy section is legitimate; the
             # schema restricts its content to ``public_data_only``. Any other
             # secret-named key is forbidden regardless of its value.
-            if is_secret_key and not (key_str.lower() == "authorization" and isinstance(child, Mapping)):
+            if is_secret_key and not (
+                key_str.lower() == "authorization" and isinstance(child, Mapping)
+            ):
                 ctx.err(child_path, "secrets, cookies, and tokens are forbidden in profiles")
             scan_for_secrets(child, child_path, ctx)
     elif isinstance(value, (list, tuple)):
@@ -110,7 +113,9 @@ def scan_for_secrets(value: Any, path: str, ctx: _Ctx) -> None:
                 break
 
 
-def _check_unknown(data: Mapping[str, Any], allowed: frozenset[str] | set[str], path: str, ctx: _Ctx) -> None:
+def _check_unknown(
+    data: Mapping[str, Any], allowed: frozenset[str] | set[str], path: str, ctx: _Ctx
+) -> None:
     for key in data:
         key_str = str(key)
         if key_str in allowed or key_str in _ALWAYS_ALLOWED_KEYS or key_str.startswith("x-"):
@@ -208,7 +213,9 @@ def _parse_extractor(raw: Any, path: str, ctx: _Ctx) -> dict[str, Any] | None:
         return None
     kind = raw.get("kind")
     if kind not in EXTRACTOR_KINDS:
-        ctx.err(f"{path}.kind", f"unknown extractor kind {kind!r}; expected one of {EXTRACTOR_KINDS}")
+        ctx.err(
+            f"{path}.kind", f"unknown extractor kind {kind!r}; expected one of {EXTRACTOR_KINDS}"
+        )
         return None
     if kind == "json_ld":
         _check_unknown(raw, {"kind", "schema_type"}, path, ctx)
@@ -344,7 +351,14 @@ def _parse_url_class(name: str, raw: Any, ctx: _Ctx, *, site: str = "") -> UrlCl
     else:
         _check_unknown(
             validation,
-            {"min_body_bytes", "canary", "canaries", "stop_signatures", "required_fields", "required_json_paths"},
+            {
+                "min_body_bytes",
+                "canary",
+                "canaries",
+                "stop_signatures",
+                "required_fields",
+                "required_json_paths",
+            },
             f"{path}.validation",
             ctx,
         )
@@ -353,9 +367,9 @@ def _parse_url_class(name: str, raw: Any, ctx: _Ctx, *, site: str = "") -> UrlCl
             ctx.err(f"{path}.validation.min_body_bytes", "must be an integer >= 1")
         else:
             min_body_bytes = raw_min
-        canaries = _string_list(validation.get("canary"), f"{path}.validation.canary", ctx) + _string_list(
-            validation.get("canaries"), f"{path}.validation.canaries", ctx
-        )
+        canaries = _string_list(
+            validation.get("canary"), f"{path}.validation.canary", ctx
+        ) + _string_list(validation.get("canaries"), f"{path}.validation.canaries", ctx)
         stop_signatures = _string_list(
             validation.get("stop_signatures"), f"{path}.validation.stop_signatures", ctx
         )
@@ -383,7 +397,9 @@ def _parse_url_class(name: str, raw: Any, ctx: _Ctx, *, site: str = "") -> UrlCl
         ctx.err(f"{path}.routes", "is required with a primary route")
     else:
         _check_unknown(routes_raw, {"primary", "alternatives"}, f"{path}.routes", ctx)
-        primary_route = _parse_route(routes_raw.get("primary"), f"{path}.routes.primary", ctx, site=site)
+        primary_route = _parse_route(
+            routes_raw.get("primary"), f"{path}.routes.primary", ctx, site=site
+        )
         alternatives_raw = routes_raw.get("alternatives") or []
         if not isinstance(alternatives_raw, list):
             ctx.err(f"{path}.routes.alternatives", "must be a list of routes")
@@ -406,7 +422,10 @@ def _parse_url_class(name: str, raw: Any, ctx: _Ctx, *, site: str = "") -> UrlCl
     quorum_fields = _string_list(raw.get("quorum_fields"), f"{path}.quorum_fields", ctx)
     if quorum_fields and required_fields and not set(quorum_fields) <= set(required_fields):
         extra = sorted(set(quorum_fields) - set(required_fields))
-        ctx.err(f"{path}.quorum_fields", f"must be a subset of validation.required_fields; extra: {extra}")
+        ctx.err(
+            f"{path}.quorum_fields",
+            f"must be a subset of validation.required_fields; extra: {extra}",
+        )
 
     session = _section(raw, "session", DEFAULT_SESSION, path, ctx)
     if not isinstance(session.get("warmup"), bool):
@@ -424,8 +443,12 @@ def _parse_url_class(name: str, raw: Any, ctx: _Ctx, *, site: str = "") -> UrlCl
     _non_negative_number(retry.get("backoff_seconds"), f"{path}.retry.backoff_seconds", ctx)
 
     limits = _section(raw, "limits", DEFAULT_LIMITS, path, ctx)
-    _positive_int(limits.get("concurrency_per_domain"), 1, f"{path}.limits.concurrency_per_domain", ctx)
-    _positive_int(limits.get("paid_attempts_per_url"), 0, f"{path}.limits.paid_attempts_per_url", ctx)
+    _positive_int(
+        limits.get("concurrency_per_domain"), 1, f"{path}.limits.concurrency_per_domain", ctx
+    )
+    _positive_int(
+        limits.get("paid_attempts_per_url"), 0, f"{path}.limits.paid_attempts_per_url", ctx
+    )
     _non_negative_number(limits.get("daily_paid_credits"), f"{path}.limits.daily_paid_credits", ctx)
 
     freshness = _section(raw, "freshness", DEFAULT_FRESHNESS, path, ctx)
@@ -438,7 +461,9 @@ def _parse_url_class(name: str, raw: Any, ctx: _Ctx, *, site: str = "") -> UrlCl
     completeness = promote.get("min_completeness")
     if not _is_number(completeness) or not (0 <= completeness <= 1):
         ctx.err(f"{path}.promote.min_completeness", "must be a number between 0 and 1")
-    _non_negative_number(promote.get("max_null_rate_growth"), f"{path}.promote.max_null_rate_growth", ctx)
+    _non_negative_number(
+        promote.get("max_null_rate_growth"), f"{path}.promote.max_null_rate_growth", ctx
+    )
 
     if primary_route is None:
         return None
@@ -549,7 +574,7 @@ def _check_class_overlap(url_classes: Mapping[str, UrlClass], ctx: _Ctx) -> None
 
 def _load_yaml(text: str) -> Any:
     try:
-        import yaml  # type: ignore[import-untyped]
+        import yaml
     except ImportError:
         from web_scraper.profiles import yamlish
 
@@ -560,8 +585,5 @@ def _load_yaml(text: str) -> Any:
 def load_profile(path: str | Path) -> SiteProfile:
     file_path = Path(path)
     text = file_path.read_text(encoding="utf-8")
-    if file_path.suffix.lower() == ".json":
-        data = json.loads(text)
-    else:
-        data = _load_yaml(text)
+    data = json.loads(text) if file_path.suffix.lower() == ".json" else _load_yaml(text)
     return parse_profile(data)

@@ -7,8 +7,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from web_scraper.contracts import Result, Verdict  # noqa: E402
-from web_scraper.reporting import summarize  # noqa: E402
+from web_scraper.contracts import Result, Verdict
+from web_scraper.reporting import summarize
 
 
 class SummaryTests(unittest.TestCase):

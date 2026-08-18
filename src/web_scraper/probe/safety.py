@@ -20,18 +20,22 @@ import http.client
 import ipaddress
 import socket
 import ssl
-from typing import Callable
+from collections.abc import Callable
+from typing import Any, cast
 from urllib.parse import urlsplit
 from urllib.request import (
+    BaseHandler,
     HTTPCookieProcessor,
     HTTPHandler,
     HTTPRedirectHandler,
     HTTPSHandler,
     OpenerDirector,
+    Request,
     build_opener,
 )
 
-Resolver = Callable[..., list[tuple]]
+Resolver = Callable[..., list[tuple[Any, ...]]]
+IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 #: Request headers that must never cross to a different host on redirect.
 SENSITIVE_REQUEST_HEADERS = frozenset(
@@ -52,7 +56,7 @@ class UnsafeTarget(ValueError):
     pass
 
 
-def _is_disallowed_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+def _is_disallowed_address(address: IPAddress) -> bool:
     """Disallow anything not globally reachable.
 
     ``is_global`` is the only reliable gate: CGNAT (``100.64.0.0/10``) and
@@ -63,12 +67,12 @@ def _is_disallowed_address(address: ipaddress.IPv4Address | ipaddress.IPv6Addres
     return not address.is_global
 
 
-def _resolve_addresses(hostname: str, port: int, resolver: Resolver) -> list[ipaddress._BaseAddress]:
+def _resolve_addresses(hostname: str, port: int, resolver: Resolver) -> list[IPAddress]:
     try:
         resolved = resolver(hostname, port, type=socket.SOCK_STREAM)
     except socket.gaierror as exc:
         raise UnsafeTarget(f"hostname resolution failed: {exc}") from exc
-    addresses = []
+    addresses: list[IPAddress] = []
     for item in resolved:
         try:
             addresses.append(ipaddress.ip_address(item[4][0]))
@@ -100,7 +104,7 @@ def validate_public_url(
         return
 
     try:
-        addresses: list[ipaddress._BaseAddress] = [ipaddress.ip_address(parsed.hostname)]
+        addresses: list[IPAddress] = [ipaddress.ip_address(parsed.hostname)]
     except ValueError:
         addresses = _resolve_addresses(parsed.hostname, port, resolver)
 
@@ -176,12 +180,12 @@ class ValidatingRedirectHandler(HTTPRedirectHandler):
         *,
         allow_private: bool,
         resolver: Resolver = socket.getaddrinfo,
-        chain: list[dict] | None = None,
+        chain: list[dict[str, Any]] | None = None,
     ) -> None:
         super().__init__()
         self.allow_private = allow_private
         self.resolver = resolver
-        self.chain: list[dict] = chain if chain is not None else []
+        self.chain: list[dict[str, Any]] = chain if chain is not None else []
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
         validate_public_url(newurl, allow_private=self.allow_private, resolver=self.resolver)
@@ -202,8 +206,9 @@ def _strip_sensitive_headers(request) -> None:  # type: ignore[no-untyped-def]
 def _make_safe_connection(base: type, *, allow_private: bool, resolver: Resolver) -> type:
     """Build a connection class that pins to a validated address at connect time."""
 
-    class _SafeConnection(base):  # type: ignore[valid-type, misc]
-        def connect(self) -> None:  # type: ignore[no-untyped-def]
+    # ``base`` is selected at runtime (HTTP vs HTTPS), so it is Any to a checker.
+    class _SafeConnection(base):  # type: ignore[misc]
+        def connect(self) -> None:
             if allow_private:
                 target = self.host
             else:
@@ -231,8 +236,10 @@ class _SafeHTTPHandler(HTTPHandler):
             http.client.HTTPConnection, allow_private=allow_private, resolver=resolver
         )
 
-    def http_open(self, req):  # type: ignore[no-untyped-def]
-        return self.do_open(self._conn, req)
+    def http_open(self, req: Request) -> Any:
+        # do_open takes a connection *factory*; typeshed models it as a narrow
+        # protocol that a dynamically built subclass cannot be checked against.
+        return self.do_open(cast(Any, self._conn), req)
 
 
 class _SafeHTTPSHandler(HTTPSHandler):
@@ -245,12 +252,15 @@ class _SafeHTTPSHandler(HTTPSHandler):
         debuglevel: int = 0,
     ) -> None:
         super().__init__(debuglevel=debuglevel, context=context)
+        # Keep our own reference: HTTPSHandler stores the context privately and
+        # typeshed does not declare that attribute.
+        self._ssl_context = context
         self._conn = _make_safe_connection(
             http.client.HTTPSConnection, allow_private=allow_private, resolver=resolver
         )
 
-    def https_open(self, req):  # type: ignore[no-untyped-def]
-        return self.do_open(self._conn, req, context=self._context)
+    def https_open(self, req: Request) -> Any:
+        return self.do_open(cast(Any, self._conn), req, context=self._ssl_context)
 
 
 def build_safe_opener(
@@ -258,11 +268,11 @@ def build_safe_opener(
     allow_private: bool = False,
     resolver: Resolver = socket.getaddrinfo,
     cookie_processor: HTTPCookieProcessor | None = None,
-    chain: list[dict] | None = None,
+    chain: list[dict[str, Any]] | None = None,
 ) -> OpenerDirector:
     """An opener whose HTTP(S) connections are SSRF-pinned and redirect-checked."""
 
-    handlers: list[object] = [
+    handlers: list[BaseHandler] = [
         _SafeHTTPHandler(allow_private=allow_private, resolver=resolver),
         _SafeHTTPSHandler(allow_private=allow_private, resolver=resolver),
         ValidatingRedirectHandler(allow_private=allow_private, resolver=resolver, chain=chain),

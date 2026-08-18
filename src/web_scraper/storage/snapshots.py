@@ -12,9 +12,9 @@ import json
 import os
 import time
 import uuid
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable
 
 from web_scraper.fetchers.base import RawResponse
 from web_scraper.storage.redaction import redact_body, redact_headers, redact_url
@@ -62,9 +62,11 @@ class SnapshotStore:
             "truncated": response.truncated,
             "elapsed_ms": response.elapsed_ms,
             "transport_error": response.transport_error,
-            "saved_at": datetime.fromtimestamp(self._now(), tz=timezone.utc).isoformat(),
+            "saved_at": datetime.fromtimestamp(self._now(), tz=UTC).isoformat(),
         }
-        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        meta_path.write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
 
         index_path = self.root / "index.jsonl"
         line = json.dumps(

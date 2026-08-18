@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import re
 from collections import Counter, defaultdict
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 from urllib.parse import urlsplit
 
 from web_scraper.contracts import PAID_ESCALATION_VERDICTS, Verdict
@@ -126,9 +127,7 @@ def _domain(url: str) -> str:
     return urlsplit(url).netloc or "?"
 
 
-def diagnose_attempts(
-    attempts: Iterable[Mapping[str, Any]], *, sample_urls: int = 3
-) -> Diagnosis:
+def diagnose_attempts(attempts: Iterable[Mapping[str, Any]], *, sample_urls: int = 3) -> Diagnosis:
     """Group attempt records (``{url, verdict, level, reason}``) into a diagnosis."""
 
     records = list(attempts)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Mapping
+from collections.abc import Mapping
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 SENSITIVE_HEADERS = frozenset(
@@ -55,8 +55,12 @@ BODY_SECRET_PATTERNS = (
     re.compile(rb"\bsk-[A-Za-z0-9]{20,}\b"),
     re.compile(rb"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
     re.compile(rb"\beyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{6,}"),
-    re.compile(rb"(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL),
-    re.compile(rb"(?i)\"?(?:api[_-]?key|access[_-]?token|secret|password)\"?\s*[:=]\s*\"?[A-Za-z0-9._\-]{8,}\"?"),
+    re.compile(
+        rb"(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL
+    ),
+    re.compile(
+        rb"(?i)\"?(?:api[_-]?key|access[_-]?token|secret|password)\"?\s*[:=]\s*\"?[A-Za-z0-9._\-]{8,}\"?"
+    ),
 )
 
 REDACTED = "[REDACTED]"

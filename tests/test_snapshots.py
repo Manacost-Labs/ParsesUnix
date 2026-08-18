@@ -10,9 +10,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from web_scraper.fetchers import RawResponse  # noqa: E402
-from web_scraper.storage.redaction import redact_headers  # noqa: E402
-from web_scraper.storage.snapshots import SnapshotStore  # noqa: E402
+from web_scraper.fetchers import RawResponse
+from web_scraper.storage.redaction import redact_headers
+from web_scraper.storage.snapshots import SnapshotStore
 
 
 class RedactionTests(unittest.TestCase):
@@ -54,7 +54,10 @@ class SnapshotStoreTests(unittest.TestCase):
 
     def test_snapshot_persists_body_and_redacts_secrets(self) -> None:
         meta_path = self.store.save(
-            url="https://demo-news.example/a", attempt_index=1, response=self.response(), verdict="OK"
+            url="https://demo-news.example/a",
+            attempt_index=1,
+            response=self.response(),
+            verdict="OK",
         )
         meta = json.loads(meta_path.read_text())
         self.assertEqual(meta["headers"]["Set-Cookie"], "[REDACTED]")
@@ -80,10 +83,16 @@ class SnapshotStoreTests(unittest.TestCase):
 
     def test_snapshots_are_grouped_by_url_and_indexed(self) -> None:
         self.store.save(
-            url="https://demo-news.example/a", attempt_index=1, response=self.response(), verdict="OK"
+            url="https://demo-news.example/a",
+            attempt_index=1,
+            response=self.response(),
+            verdict="OK",
         )
         self.store.save(
-            url="https://demo-news.example/a", attempt_index=2, response=self.response(), verdict="SOFT_BLOCK"
+            url="https://demo-news.example/a",
+            attempt_index=2,
+            response=self.response(),
+            verdict="SOFT_BLOCK",
         )
         key = hashlib.sha256(b"https://demo-news.example/a").hexdigest()[:16]
         directory = Path(self.tempdir.name) / key
@@ -112,7 +121,13 @@ class SnapshotStoreTests(unittest.TestCase):
 
 class GatewaySnapshotIntegrationTests(unittest.TestCase):
     def test_gateway_writes_a_snapshot_per_attempt(self) -> None:
-        from test_gateway import PAGE_URL, FakeTransport, RecordingPacer, fixture_response, make_profile
+        from test_gateway import (
+            PAGE_URL,
+            FakeTransport,
+            RecordingPacer,
+            fixture_response,
+            make_profile,
+        )
         from web_scraper.fetchers import FetchGateway
 
         tempdir = tempfile.TemporaryDirectory()

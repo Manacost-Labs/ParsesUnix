@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from web_scraper.publish import DatasetStore, validate_staging  # noqa: E402
+from web_scraper.publish import DatasetStore, validate_staging
 
 
 class ValidateStagingTests(unittest.TestCase):
@@ -18,26 +18,40 @@ class ValidateStagingTests(unittest.TestCase):
         return out
 
     def test_complete_dataset_passes(self) -> None:
-        d = validate_staging(self.rows(10), required_fields=["title", "price"],
-                             expected_count=10, min_completeness=0.95)
+        d = validate_staging(
+            self.rows(10),
+            required_fields=["title", "price"],
+            expected_count=10,
+            min_completeness=0.95,
+        )
         self.assertTrue(d.ok)
 
     def test_volume_shortfall_rejects(self) -> None:
-        d = validate_staging(self.rows(5), required_fields=["title"],
-                             expected_count=100, min_completeness=0.95)
+        d = validate_staging(
+            self.rows(5), required_fields=["title"], expected_count=100, min_completeness=0.95
+        )
         self.assertFalse(d.ok)
         self.assertIn("volume", d.reason)
 
     def test_completeness_shortfall_rejects(self) -> None:
-        d = validate_staging(self.rows(10, missing=3), required_fields=["title"],
-                             expected_count=10, min_completeness=0.95)
+        d = validate_staging(
+            self.rows(10, missing=3),
+            required_fields=["title"],
+            expected_count=10,
+            min_completeness=0.95,
+        )
         self.assertFalse(d.ok)
         self.assertIn("completeness", d.reason)
 
     def test_null_rate_growth_rejects(self) -> None:
-        d = validate_staging(self.rows(10, missing=2), required_fields=["title"],
-                             expected_count=10, min_completeness=0.5,
-                             baseline_null_rate={"title": 0.02}, max_null_rate_growth=2.0)
+        d = validate_staging(
+            self.rows(10, missing=2),
+            required_fields=["title"],
+            expected_count=10,
+            min_completeness=0.5,
+            baseline_null_rate={"title": 0.02},
+            max_null_rate_growth=2.0,
+        )
         self.assertFalse(d.ok)
         self.assertIn("null-rate", d.reason)
 
@@ -69,7 +83,9 @@ class DatasetStoreTests(unittest.TestCase):
         self.store.reset_staging()
         self.store.stage("k0", url="https://x.example/0", data={"title": "changed"})
         self.store.stage("k1", url="https://x.example/1", data={"title": "changed"})
-        decision = self.store.promote(required_fields=["title"], expected_count=10, min_completeness=0.95)
+        decision = self.store.promote(
+            required_fields=["title"], expected_count=10, min_completeness=0.95
+        )
         self.assertFalse(decision.ok)
         self.assertEqual(self.store.clean_rows(), before)  # unchanged: no half-update
         self.assertEqual(len(self.store.staged_rows()), 2)  # kept for review

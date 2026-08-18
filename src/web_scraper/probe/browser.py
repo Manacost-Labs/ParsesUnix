@@ -12,14 +12,18 @@ with an install hint only when a real browser run is requested.
 from __future__ import annotations
 
 import json
+import logging
 import socket
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import Any
 from urllib.parse import urlsplit
 
 from web_scraper.contracts import ContentRules, Verdict
 from web_scraper.probe.safety import Resolver, is_public_url, validate_public_url
 from web_scraper.triage import classify_response
+
+logger = logging.getLogger(__name__)
 
 BROWSER_RECON_SCHEMA = "web-scraper/browser-recon/v2"
 
@@ -173,7 +177,7 @@ class BrowserReconReport:
     executed: bool
     skip_reason: str | None
     captured_count: int
-    candidates: tuple[dict, ...]
+    candidates: tuple[dict[str, Any], ...]
     notes: tuple[str, ...]
     #: Triage of the navigation itself. Without it, a recon that was blocked
     #: looks identical to a recon that simply found no API.
@@ -235,13 +239,13 @@ def _capture_with_playwright(
 
     captured: list[CapturedResponse] = []
 
-    def guard_route(route) -> None:  # pragma: no cover - needs a live browser
+    def guard_route(route: Any) -> None:  # pragma: no cover - needs a live browser
         if is_public_url(route.request.url, allow_private=allow_private, resolver=resolver):
             route.continue_()
         else:
             route.abort()
 
-    def on_response(response) -> None:  # pragma: no cover - needs a live browser
+    def on_response(response: Any) -> None:  # pragma: no cover - needs a live browser
         if len(captured) >= max_captures:
             return
         content_type = (response.headers or {}).get("content-type", "")
@@ -250,6 +254,7 @@ def _capture_with_playwright(
         try:
             body = response.body()
         except Exception:
+            logger.debug("could not read response body for %s", response.url, exc_info=True)
             return
         if not body or len(body) > max_json_bytes:
             return
@@ -286,10 +291,11 @@ def _capture_with_playwright(
         try:
             page.wait_for_load_state("networkidle", timeout=timeout_s * 1000)
         except Exception:
-            pass  # capture whatever arrived before the timeout
+            logger.debug("networkidle not reached during recon of %s", url, exc_info=True)
         try:
             html = page.content().encode("utf-8")
         except Exception:
+            logger.debug("could not read rendered DOM for %s", url, exc_info=True)
             html = b""
     finally:  # pragma: no cover - needs a live browser
         for obj in (context, browser, playwright):
@@ -298,7 +304,7 @@ def _capture_with_playwright(
                 try:
                     closer()
                 except Exception:
-                    pass
+                    logger.debug("failed to close %r during recon", obj, exc_info=True)
     return captured, nav_status, html
 
 
@@ -352,9 +358,10 @@ def browser_recon(
     navigation = classify_response(
         status=nav_status, body=html, rules=ContentRules(min_body_bytes=1)
     )
-    notes = _RECON_NOTES
+    notes: tuple[str, ...] = _RECON_NOTES
     if navigation.verdict not in (Verdict.OK, Verdict.THIN_CONTENT):
-        notes = notes + (
+        notes = (
+            *notes,
             f"navigation was not clean ({navigation.verdict.value}): the browser never saw the "
             "real page, so an empty candidate list does NOT mean the site has no JSON API",
         )

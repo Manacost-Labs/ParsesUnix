@@ -14,8 +14,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from web_scraper.contracts import ContentRules
 from web_scraper.fetchers.transports import UrllibTransport
@@ -26,7 +27,11 @@ from web_scraper.regression.detect import (
     compare_bodies,
     compare_saved_to_current,
 )
-from web_scraper.storage.fixtures import iter_saved_responses, load_saved_response
+from web_scraper.storage.fixtures import (
+    SavedResponse,
+    iter_saved_responses,
+    load_saved_response,
+)
 
 
 def _class_for(profile_path: Path | None, url: str, url_class: str | None) -> UrlClass | None:
@@ -48,7 +53,9 @@ def _extraction_args(url_class: UrlClass | None) -> tuple[list[dict[str, Any]], 
     return [dict(extractor) for extractor in url_class.extractors], fields
 
 
-def _compare_live(saved, url_class: UrlClass | None, timeout: float) -> RegressionReport:
+def _compare_live(
+    saved: SavedResponse, url_class: UrlClass | None, timeout: float
+) -> RegressionReport:
     transport = UrllibTransport(timeout=timeout)
     current = transport.fetch(saved.url)
     extractors, fields = _extraction_args(url_class)
@@ -93,7 +100,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     current_body=args.current.read_bytes(),
                     baseline_headers=headers,
                     current_headers=headers,
-                    rules=url_class.content_rules() if url_class else ContentRules(min_body_bytes=1),
+                    rules=url_class.content_rules()
+                    if url_class
+                    else ContentRules(min_body_bytes=1),
                     extractors=extractors,
                     fields=fields,
                 )
@@ -134,12 +143,16 @@ def _print_text(reports: Sequence[RegressionReport]) -> None:
         print(f"  verdict:   {report.baseline_verdict} -> {report.current_verdict}")
         print(f"  rendering: {report.baseline_rendering} -> {report.current_rendering}")
         print(f"  {report.summary}")
-        for change in report.field_changes:
-            detail = f"{change.before_source or '-'} -> {change.after_source or '-'}"
-            print(f"    field {change.field}: {change.kind} ({detail})")
-        for change in report.structure_changes:
-            hint = f"  [try {change.replacement_hint}]" if change.replacement_hint else ""
-            print(f"    {change.kind}: {change.detail}{hint}")
+        for field_change in report.field_changes:
+            sources = f"{field_change.before_source or '-'} -> {field_change.after_source or '-'}"
+            print(f"    field {field_change.field}: {field_change.kind} ({sources})")
+        for structure_change in report.structure_changes:
+            hint = (
+                f"  [try {structure_change.replacement_hint}]"
+                if structure_change.replacement_hint
+                else ""
+            )
+            print(f"    {structure_change.kind}: {structure_change.detail}{hint}")
         print()
 
 

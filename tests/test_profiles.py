@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import sys
 import unittest
 from pathlib import Path
@@ -8,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from web_scraper.profiles import ProfileError, load_profile, parse_profile  # noqa: E402
+from web_scraper.profiles import ProfileError, load_profile, parse_profile
 
 TEMPLATE = ROOT / ".agents/skills/web-scraper/assets/templates/site-profile.yaml"
 
@@ -131,8 +130,6 @@ class ProfileSecretTests(unittest.TestCase):
 
     def test_policy_authorization_section_is_allowed(self) -> None:
         parse_profile(minimal_profile())  # must not raise
-
-
 
 
 class ProfileRouteAndOverlapTests(unittest.TestCase):

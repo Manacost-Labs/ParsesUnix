@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from web_scraper.profiles.yamlish import YamlishError, loads  # noqa: E402
+from web_scraper.profiles.yamlish import YamlishError, loads
 
 
 class YamlishTests(unittest.TestCase):
@@ -15,11 +15,11 @@ class YamlishTests(unittest.TestCase):
         data = loads(
             "a:\n"
             "  b: 1\n"
-            "  c: [x, \"y,z\", 2]\n"
+            '  c: [x, "y,z", 2]\n'
             "  d:\n"
             "    - kind: css\n"
             "      fields:\n"
-            "        title: \"h1::text\"\n"
+            '        title: "h1::text"\n'
             "    - plain\n"
             "  e: null\n"
             "  f: true\n"
@@ -58,7 +58,6 @@ class YamlishTests(unittest.TestCase):
         with self.assertRaises(YamlishError):
             loads("a: 1\na: 2\n")
 
-
     def test_apostrophe_in_plain_scalar_is_literal(self) -> None:
         data = loads("notes: it's fine  # trailing\n")
         self.assertEqual(data["notes"], "it's fine")
@@ -84,14 +83,15 @@ class YamlishPyYAMLDifferentialTests(unittest.TestCase):
 
     def test_matches_pyyaml_on_subset(self) -> None:
         import yaml
+
         doc = (
             "site: demo.example\n"
             "authorization:\n"
             "  public_data_only: true\n"
-            "list: [a, \"b,c\", 2]\n"
+            'list: [a, "b,c", 2]\n'
             "nested:\n"
             "  n: -3.5\n"
-            "  s: \"^https://x\\\\.y/\"\n"
+            '  s: "^https://x\\\\.y/"\n'
             "  empty: null\n"
         )
         self.assertEqual(loads(doc), yaml.safe_load(doc))

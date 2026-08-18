@@ -7,8 +7,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from web_scraper.contracts import Verdict  # noqa: E402
-from web_scraper.fetchers.circuit import CircuitBreaker  # noqa: E402
+from web_scraper.contracts import Verdict
+from web_scraper.fetchers.circuit import CircuitBreaker
 
 
 class CircuitBreakerTests(unittest.TestCase):

@@ -5,18 +5,22 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from web_scraper.profiles.draft import draft_profile_from_probe
 from web_scraper.profiles.model import ProfileError, load_profile
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Validate or draft a Site Profile without touching the network.")
+    parser = argparse.ArgumentParser(
+        description="Validate or draft a Site Profile without touching the network."
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    validate_parser = subparsers.add_parser("validate", help="Validate a profile file (YAML or JSON).")
+    validate_parser = subparsers.add_parser(
+        "validate", help="Validate a profile file (YAML or JSON)."
+    )
     validate_parser.add_argument("profile", type=Path)
 
     draft_parser = subparsers.add_parser("draft", help="Draft a profile from a saved probe report.")
@@ -34,7 +38,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps({"ok": False, "errors": exc.errors}, ensure_ascii=False, indent=2))
             return 2
         except (OSError, ValueError) as exc:
-            print(json.dumps({"ok": False, "errors": [str(exc)]}, ensure_ascii=False), file=sys.stderr)
+            print(
+                json.dumps({"ok": False, "errors": [str(exc)]}, ensure_ascii=False), file=sys.stderr
+            )
             return 2
         print(
             json.dumps(

@@ -15,10 +15,11 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -71,8 +72,13 @@ def validate_staging(
 
     def decision(ok: bool, reason: str) -> PromoteDecision:
         return PromoteDecision(
-            ok=ok, reason=reason, staged=staged, clean_before=0,
-            completeness=round(completeness, 4), null_rate=null_rate, conflicts=conflicts,
+            ok=ok,
+            reason=reason,
+            staged=staged,
+            clean_before=0,
+            completeness=round(completeness, 4),
+            null_rate=null_rate,
+            conflicts=conflicts,
         )
 
     if staged == 0:
@@ -93,7 +99,8 @@ def validate_staging(
         base = baseline.get(f, 0.0)
         if base > 0 and rate > base * max_null_rate_growth:
             return decision(
-                False, f"null-rate for {f!r} grew {rate:.2%} vs baseline {base:.2%} (> x{max_null_rate_growth})"
+                False,
+                f"null-rate for {f!r} grew {rate:.2%} vs baseline {base:.2%} (> x{max_null_rate_growth})",
             )
         if base == 0 and rate > 0 and min_completeness >= 1.0:
             return decision(False, f"null-rate for required field {f!r} is {rate:.2%}, expected 0")
@@ -155,8 +162,14 @@ class DatasetStore:
                     url=excluded.url, data=excluded.data, content_hash=excluded.content_hash,
                     conflict=excluded.conflict, staged_at=excluded.staged_at
                 """,
-                (natural_key, url, json.dumps(dict(data), ensure_ascii=False),
-                 content_hash, int(conflict), self._now()),
+                (
+                    natural_key,
+                    url,
+                    json.dumps(dict(data), ensure_ascii=False),
+                    content_hash,
+                    int(conflict),
+                    self._now(),
+                ),
             )
 
     def staged_rows(self) -> list[dict[str, Any]]:
@@ -181,7 +194,7 @@ class DatasetStore:
             rows = conn.execute("SELECT data FROM clean").fetchall()
         total = len(rows)
         if total == 0:
-            return {f: 0.0 for f in required_fields}
+            return dict.fromkeys(required_fields, 0.0)
         records = [json.loads(r["data"]) for r in rows]
         return {
             f: sum(1 for rec in records if rec.get(f) in (None, "")) / total
@@ -209,9 +222,13 @@ class DatasetStore:
         )
         clean_before = self.clean_count()
         decision = PromoteDecision(
-            ok=decision.ok, reason=decision.reason, staged=decision.staged,
-            clean_before=clean_before, completeness=decision.completeness,
-            null_rate=decision.null_rate, conflicts=decision.conflicts,
+            ok=decision.ok,
+            reason=decision.reason,
+            staged=decision.staged,
+            clean_before=clean_before,
+            completeness=decision.completeness,
+            null_rate=decision.null_rate,
+            conflicts=decision.conflicts,
         )
         if not decision.ok:
             return decision  # reject: clean dataset untouched, staging kept for review
@@ -244,4 +261,7 @@ class DatasetStore:
     def clean_rows(self) -> list[dict[str, Any]]:
         with closing(self._connect()) as conn:
             rows = conn.execute("SELECT * FROM clean ORDER BY natural_key").fetchall()
-        return [{"natural_key": r["natural_key"], "url": r["url"], **json.loads(r["data"])} for r in rows]
+        return [
+            {"natural_key": r["natural_key"], "url": r["url"], **json.loads(r["data"])}
+            for r in rows
+        ]

@@ -6,12 +6,12 @@ import argparse
 import json
 import sqlite3
 import uuid
+from collections.abc import Mapping, Sequence
 from contextlib import closing
 from dataclasses import asdict, dataclass
-from datetime import date
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Mapping, Sequence
 
 
 class BudgetExceeded(RuntimeError):
@@ -42,6 +42,17 @@ def _decimal(value: Decimal | int | float | str) -> Decimal:
     return parsed
 
 
+def _utc_day() -> str:
+    """Today's billing day in UTC.
+
+    Providers bill on a UTC day boundary, and two hosts in different timezones
+    must agree on "today" — a local date would enforce the daily cap twice or
+    not at all around midnight.
+    """
+
+    return datetime.now(UTC).date().isoformat()
+
+
 def scrape_do_request_cost(headers: Mapping[str, str]) -> Decimal:
     normalized = {str(key).lower(): str(value) for key, value in headers.items()}
     raw = normalized.get("scrape.do-request-cost")
@@ -59,7 +70,9 @@ class BudgetLedger:
         daily_money_limit: Decimal | int | float | str | None = None,
     ) -> None:
         self.path = Path(path)
-        self.daily_credit_limit = None if daily_credit_limit is None else _decimal(daily_credit_limit)
+        self.daily_credit_limit = (
+            None if daily_credit_limit is None else _decimal(daily_credit_limit)
+        )
         self.daily_money_limit = None if daily_money_limit is None else _decimal(daily_money_limit)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
@@ -99,7 +112,7 @@ class BudgetLedger:
         return credits, money
 
     def usage(self, *, day: str | None = None, provider: str | None = None) -> Usage:
-        selected_day = day or date.today().isoformat()
+        selected_day = day or _utc_day()
         query = "SELECT credits, money FROM usage_events WHERE day = ?"
         params: list[str] = [selected_day]
         if provider:
@@ -121,7 +134,7 @@ class BudgetLedger:
     ) -> Usage:
         if not provider.strip():
             raise ValueError("provider must not be empty")
-        selected_day = day or date.today().isoformat()
+        selected_day = day or _utc_day()
         selected_id = request_id or str(uuid.uuid4())
         credit_value = _decimal(credits)
         money_value = _decimal(money)
@@ -216,4 +229,3 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
