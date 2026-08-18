@@ -42,9 +42,19 @@ they re-export from `web_scraper` and contain no logic of their own.
 pip install -e .
 # optional extras:
 pip install -e '.[yaml]'      # PyYAML (a built-in fallback parser works without it)
-pip install -e '.[browser]'   # Playwright; then: playwright install chromium
+pip install -e '.[browser]'   # Playwright — enables the L2 browser level
 pip install -e '.[http]'      # Scrapling transports (real L1/L2)
 ```
+
+To enable **L2** (JavaScript rendering and CSR API reconnaissance) you also need
+the browser binary:
+
+```bash
+playwright install chromium
+```
+
+Without it the core still runs: L2 routes are reported as skipped rather than
+failing a run, and browser tests skip automatically.
 
 Installing exposes console commands `ws-probe`, `ws-triage`, `ws-profile`, `ws-budget`.
 Without installing, the wrapper scripts locate the package via the repo layout or the

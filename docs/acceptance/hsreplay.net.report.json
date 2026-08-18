@@ -1,16 +1,21 @@
 {
   "total": 3,
-  "resolved": 0,
-  "coverage": 0.0,
+  "resolved": 2,
+  "coverage": 0.6667,
   "metrics": {
     "verdicts": {
-      "SOFT_BLOCK": 2,
+      "OK": 2,
       "DEAD_URL": 1
     },
-    "by_level": {},
+    "by_level": {
+      "L1": 2
+    },
     "fallbacks": 0,
-    "extractor_sources": {},
-    "quorum_conflicts": 0,
+    "extractor_sources": {
+      "json_ld": 1,
+      "meta": 1
+    },
+    "quorum_conflicts": 2,
     "fresh_unchanged": 0,
     "cost_credits": "0",
     "paid_calls": 0,
@@ -18,17 +23,20 @@
       "hsreplay.net": 3
     }
   },
-  "unresolved_urls": [
-    "https://hsreplay.net/",
-    "https://hsreplay.net/decks/"
-  ],
+  "unresolved_urls": [],
   "quarantined_urls": [
     "https://hsreplay.net/definitely-not-a-real-page-xyz"
   ],
   "dead_zone_urls": [],
   "promote": {
     "ok": true,
-    "reason": "no changes to promote",
-    "staged": 0
+    "reason": "validation passed",
+    "staged": 2,
+    "clean_before": 0,
+    "completeness": 1.0,
+    "null_rate": {
+      "title": 0.0
+    },
+    "conflicts": 2
   }
 }

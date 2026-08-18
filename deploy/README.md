@@ -13,6 +13,11 @@ git clone https://github.com/Manacost-Labs/ParsesUnix.git
 cd ParsesUnix
 python3 -m pip install --user -e .          # installs ws-probe / ws-triage / ws-profile / ws-budget / ws-run
 
+# Enable the L2 browser level (JS rendering + CSR API reconnaissance):
+python3 -m pip install --user -e '.[browser]'
+python3 -m playwright install --with-deps chromium   # --with-deps needs sudo for OS libs
+# Without this the core still runs; L2 routes are simply reported as skipped.
+
 mkdir -p ~/.config/web-scraper ~/ParsesUnix/state
 cp deploy/run.example.json ~/.config/web-scraper/run.json
 cp deploy/env.example ~/.config/web-scraper/env && chmod 600 ~/.config/web-scraper/env

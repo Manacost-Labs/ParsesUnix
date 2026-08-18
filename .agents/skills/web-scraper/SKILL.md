@@ -32,6 +32,7 @@ Build the cheapest reliable collection path that preserves data quality and repo
 ## Stack selection
 
 - Use Scrapling `Fetcher`/sessions for L1 HTTP, `DynamicFetcher` for ordinary rendering, and `StealthyFetcher` only for proven browser challenges. When using its CLI to produce model-readable content, require the current prompt-injection protection option from the official Scrapling skill/docs.
+- L2 (browser) ships in this package via Playwright: install with `pip install -e '.[browser]' && playwright install chromium`. Without it, L2 routes are reported as skipped instead of failing the run. Do not assume L2 beats L1: a headless browser is easier to fingerprint, and on real sites it can be challenged where plain HTTP is not — try L1 and alternative routes first (see [docs/acceptance](../../../docs/acceptance/README.md)).
 - Keep Scrapy only for existing Scrapy projects or ecosystem-specific extensions.
 - Use `wreq` + `wreq-util` + `scraper` + `tokio` for a high-volume Rust L1 worker when a single binary materially helps. Do not port browser-heavy L2 work to Rust for style alone.
 - Before generating provider or library integration code, read [providers-and-stacks.md](references/providers-and-stacks.md) and re-open the linked official documentation if its verification date is stale or the API/pricing may have changed.
@@ -49,8 +50,18 @@ Build the cheapest reliable collection path that preserves data quality and repo
 The scripts import the `web_scraper` core package. In its home repository it is
 found automatically. Elsewhere, either install it (`pip install -e .` from the
 ParserUnix repository) or set `WEB_SCRAPER_SRC` to the repository's `src/`
-directory. Installing also exposes `ws-probe`, `ws-triage`, `ws-profile`, and
-`ws-budget` on the PATH.
+directory. Installing also exposes `ws-probe`, `ws-triage`, `ws-profile`,
+`ws-budget`, and `ws-run` on the PATH.
+
+To enable the L2 browser level (JavaScript rendering and CSR reconnaissance):
+
+```bash
+pip install -e '.[browser]'
+playwright install chromium
+```
+
+Everything else runs on the standard library alone. Browser-dependent tests skip
+automatically when Playwright is absent, so the suite stays green either way.
 
 ## Bundled resources
 

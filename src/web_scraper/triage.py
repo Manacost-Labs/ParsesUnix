@@ -10,17 +10,26 @@ from typing import Any, Mapping, Sequence
 from web_scraper.contracts import ContentRules, TriageResult, Verdict
 
 BLOCK_SIGNATURES = (
+    # Interstitial/denial text that only a real block or challenge page carries.
     "just a moment",
     "attention required! | cloudflare",
+    "sorry, you have been blocked",
+    "enable javascript and cookies to continue",
     "cf-chl-",
     "cf_chl_",
-    "/cdn-cgi/challenge-platform",
     "cloudflare ray id",
     "verify you are human",
     "checking your browser",
-    # Specific anti-bot vendor challenge markers. A bare "captcha" is deliberately
-    # NOT here: it matches legitimate markup (e.g. a theme's `tds_captcha` JS var),
-    # producing false SOFT_BLOCK verdicts on ordinary pages.
+    # Specific anti-bot vendor challenge markers.
+    #
+    # Two markers are deliberately NOT here, both verified against live pages:
+    #   * a bare "captcha" — matches legitimate markup such as a WordPress
+    #     theme's `tds_captcha` JS variable;
+    #   * "/cdn-cgi/challenge-platform" — Cloudflare ships this JS-detection
+    #     bundle on ORDINARY pages too (hsguru.com serves ~19k chars of real
+    #     content alongside it), so it proves bot management is enabled, not
+    #     that this response was blocked.
+    # A signature must appear only when the response really is a block.
     "g-recaptcha-response",
     "hcaptcha.com/captcha",
     "px-captcha",

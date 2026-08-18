@@ -17,9 +17,11 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping, Sequence
 from urllib.parse import urlsplit
 
+from web_scraper.contracts import ContentRules, Verdict
 from web_scraper.probe.safety import Resolver, is_public_url, validate_public_url
+from web_scraper.triage import classify_response
 
-BROWSER_RECON_SCHEMA = "web-scraper/browser-recon/v1"
+BROWSER_RECON_SCHEMA = "web-scraper/browser-recon/v2"
 
 SENSITIVE_HEADERS = frozenset(
     {
@@ -173,11 +175,22 @@ class BrowserReconReport:
     captured_count: int
     candidates: tuple[dict, ...]
     notes: tuple[str, ...]
+    #: Triage of the navigation itself. Without it, a recon that was blocked
+    #: looks identical to a recon that simply found no API.
+    navigation_status: int | None = None
+    navigation_verdict: str | None = None
+
+    @property
+    def conclusive(self) -> bool:
+        """False when the browser never really saw the page (blocked/failed)."""
+
+        return self.executed and self.navigation_verdict in (None, "OK", "THIN_CONTENT")
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["candidates"] = list(self.candidates)
         payload["notes"] = list(self.notes)
+        payload["conclusive"] = self.conclusive
         return payload
 
 
@@ -209,7 +222,9 @@ def _capture_with_playwright(
     headless: bool,
     allow_private: bool = False,
     resolver: Resolver = socket.getaddrinfo,
-) -> list[CapturedResponse]:
+) -> tuple[list[CapturedResponse], int | None, bytes]:
+    """Returns (captured JSON responses, navigation status, rendered HTML)."""
+
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:  # pragma: no cover - depends on environment
@@ -256,6 +271,8 @@ def _capture_with_playwright(
         )
 
     playwright = browser = context = None  # pragma: no cover - needs a live browser
+    nav_status: int | None = None  # pragma: no cover - needs a live browser
+    html = b""  # pragma: no cover - needs a live browser
     try:  # pragma: no cover - needs a live browser
         playwright = sync_playwright().start()
         browser = playwright.chromium.launch(headless=headless)
@@ -263,11 +280,17 @@ def _capture_with_playwright(
         context.route("**/*", guard_route)  # SSRF guard on every request
         page = context.new_page()
         page.on("response", on_response)
-        page.goto(url, timeout=timeout_s * 1000)
+        navigation = page.goto(url, timeout=timeout_s * 1000)
+        if navigation is not None:
+            nav_status = navigation.status
         try:
             page.wait_for_load_state("networkidle", timeout=timeout_s * 1000)
         except Exception:
             pass  # capture whatever arrived before the timeout
+        try:
+            html = page.content().encode("utf-8")
+        except Exception:
+            html = b""
     finally:  # pragma: no cover - needs a live browser
         for obj in (context, browser, playwright):
             closer = getattr(obj, "close", None) or getattr(obj, "stop", None) if obj else None
@@ -276,7 +299,7 @@ def _capture_with_playwright(
                     closer()
                 except Exception:
                     pass
-    return captured
+    return captured, nav_status, html
 
 
 def browser_recon(
@@ -315,7 +338,7 @@ def browser_recon(
                 notes=_RECON_NOTES,
             )
 
-    captured = _capture_with_playwright(
+    captured, nav_status, html = _capture_with_playwright(
         url,
         timeout_s=timeout_s,
         max_captures=max_captures,
@@ -324,6 +347,17 @@ def browser_recon(
         allow_private=allow_private,
         resolver=resolver,
     )
+    # Triage the navigation itself: a blocked recon must not be reported as
+    # "this site has no API" — those need completely different follow-ups.
+    navigation = classify_response(
+        status=nav_status, body=html, rules=ContentRules(min_body_bytes=1)
+    )
+    notes = _RECON_NOTES
+    if navigation.verdict not in (Verdict.OK, Verdict.THIN_CONTENT):
+        notes = notes + (
+            f"navigation was not clean ({navigation.verdict.value}): the browser never saw the "
+            "real page, so an empty candidate list does NOT mean the site has no JSON API",
+        )
     candidates = extract_candidates(captured, target_fields)
     return BrowserReconReport(
         schema=BROWSER_RECON_SCHEMA,
@@ -332,5 +366,7 @@ def browser_recon(
         skip_reason=None,
         captured_count=len(captured),
         candidates=tuple(candidate.to_dict() for candidate in candidates),
-        notes=_RECON_NOTES,
+        notes=notes,
+        navigation_status=nav_status,
+        navigation_verdict=navigation.verdict.value,
     )

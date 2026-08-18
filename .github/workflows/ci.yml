@@ -23,6 +23,24 @@ jobs:
       - name: Run test suite
         run: python -m unittest discover -s tests -v
 
+  browser-tests:
+    # The L2 paths (real Chromium navigation, SSRF route guard, XHR capture)
+    # cannot be covered by the stdlib job, where they skip. The fixture site is
+    # served from localhost, so this job needs no external network.
+    name: browser tests (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install package with the browser extra
+        run: python -m pip install -e '.[browser]'
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Run browser tests
+        run: python -m unittest tests.test_browser_live -v
+
   provider-freshness:
     # Non-blocking signal on PRs: surfaces stale provider docs without gating
     # unrelated merges (the hard gate is the scheduled staleness-watchdog).

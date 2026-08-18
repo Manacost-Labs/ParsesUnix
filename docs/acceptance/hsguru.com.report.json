@@ -1,16 +1,20 @@
 {
   "total": 3,
-  "resolved": 0,
-  "coverage": 0.0,
+  "resolved": 1,
+  "coverage": 0.3333,
   "metrics": {
     "verdicts": {
-      "SOFT_BLOCK": 1,
+      "OK": 1,
       "AUTH_REQUIRED": 1,
       "DEAD_URL": 1
     },
-    "by_level": {},
+    "by_level": {
+      "L1": 1
+    },
     "fallbacks": 0,
-    "extractor_sources": {},
+    "extractor_sources": {
+      "heuristic": 1
+    },
     "quorum_conflicts": 0,
     "fresh_unchanged": 0,
     "cost_credits": "0",
@@ -20,7 +24,6 @@
     }
   },
   "unresolved_urls": [
-    "https://www.hsguru.com/",
     "https://www.hsguru.com/leaderboard/player-stats"
   ],
   "quarantined_urls": [
@@ -29,7 +32,13 @@
   "dead_zone_urls": [],
   "promote": {
     "ok": true,
-    "reason": "no changes to promote",
-    "staged": 0
+    "reason": "validation passed",
+    "staged": 1,
+    "clean_before": 0,
+    "completeness": 1.0,
+    "null_rate": {
+      "title": 0.0
+    },
+    "conflicts": 0
   }
 }
