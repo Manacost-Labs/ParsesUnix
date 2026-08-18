@@ -16,6 +16,20 @@
 - 404/410, origin failure, rate limit, auth/access denial и parse failure не эскалируются на деньги.
 - Исходные материалы хранятся без редактирования в `docs/research`; рабочие references устраняют найденные противоречия.
 
+## Статус (обновлено 2026-08-18)
+
+Реализовано и в проде-готовности бесплатное ядро L0–L2:
+
+- **Этапы 0–2 — готовы.** Контракты, Site Profile + валидатор, probe v2, браузерная разведка CSR, Fetch Gateway L0–L2 (строгая политика эскалации, circuit breaker, session/pacing/snapshots), checkpoint/resume через SQLite-очередь.
+- **Этап 4 (частично) — готов бесплатный контур.** Очередь с дедупом/карантином/dead zones, phase-A HEAD sweep, раннер с окном/резюме, итоговый отчёт по каждому URL. Платный контур этапа 3 отложен (нет ключей).
+- **Этап 5 — готов.** Цепочка экстракторов (JSON-LD→app_state→meta→CSS→heuristic) с провенансом и кворумом, staging→validate→atomic promote→LKG.
+- **Этап 5.5 (freshness) — готов.** Условные запросы, content-hash, адаптивный интервал; на example.com подтверждён реальный 304.
+- **Этап 6 (наблюдаемость) — базово готов.** Метрики, отчёт, alert-хук (log; Telegram — слот). ClickHouse/R2 отложены.
+- **Инфраструктура:** CI (unittest 3.11–3.13), пакет `pip install -e .`, ws-* CLI, systemd-деплой на debian-151, 198 тестов.
+- **Приёмка на реальных доменах** — см. `docs/acceptance/`: cost-safety и triage подтверждены; Cloudflare-домены требуют L2 (Scrapling/Playwright) на сервере.
+
+Отложено: платные провайдеры L3–L4 (этап 3), ACR (этап 7), Rust L1 (этап 8), ClickHouse/R2.
+
 ## Этапы
 
 ### Этап 0 — фундамент (в этом каркасе)
