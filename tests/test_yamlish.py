@@ -71,6 +71,44 @@ class YamlishTests(unittest.TestCase):
         data = loads("m: 'hello world'\n")
         self.assertEqual(data["m"], "hello world")
 
+    def test_flow_mappings_of_scalars(self) -> None:
+        # The shape every YAML example uses for a compact route or field list.
+        self.assertEqual(loads("r: {type: rss, level: L0}\n")["r"], {"type": "rss", "level": "L0"})
+        self.assertEqual(loads("e: {}\n")["e"], {})
+
+    def test_nested_flow_mapping_is_not_torn_at_its_inner_comma(self) -> None:
+        data = loads('x: {kind: css, fields: {title: "h1::text", date: "time::attr(d)"}}\n')
+        self.assertEqual(
+            data["x"],
+            {"kind": "css", "fields": {"title": "h1::text", "date": "time::attr(d)"}},
+        )
+
+    def test_flow_mappings_inside_a_list(self) -> None:
+        data = loads("routes:\n  - {type: rss, level: L0}\n  - {type: direct_http, level: L1}\n")
+        self.assertEqual(data["routes"][1], {"type": "direct_http", "level": "L1"})
+
+    def test_a_malformed_flow_mapping_fails_loudly(self) -> None:
+        for bad in ("x: {a: 1\n", "x: {a}\n", "x: {a: 1, a: 2}\n"):
+            with self.assertRaises(YamlishError):
+                loads(bad)
+
+    def test_the_readme_profile_example_parses(self) -> None:
+        # The example a newcomer copies must work on a bare stdlib install.
+        example = (
+            "site: example.com\n"
+            "authorization:\n"
+            "  public_data_only: true\n"
+            "url_classes:\n"
+            "  article:\n"
+            '    match: "^https://example\\\\.com/articles/"\n'
+            "    routes:\n"
+            "      primary: {id: articles-api, type: json_api, level: L0}\n"
+            "      alternatives:\n"
+            "        - {type: direct_http, level: L1}\n"
+        )
+        data = loads(example)
+        self.assertEqual(data["url_classes"]["article"]["routes"]["primary"]["id"], "articles-api")
+
 
 class YamlishPyYAMLDifferentialTests(unittest.TestCase):
     """When PyYAML is present, yamlish must agree on the profile subset."""

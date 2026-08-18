@@ -1,147 +1,347 @@
-# ParserUnix — cost-aware web scraper
+# ParsesUnix
 
-A reliability- and cost-first framework for scraping one page or groups of URLs.
-The guiding rule: build the **cheapest reliable collection path** that preserves
-data quality and reports every unresolved URL. Paid providers are a last resort,
-unlocked only when a classifier has proven the free levels do not work.
+[![CI](https://github.com/Manacost-Labs/ParsesUnix/actions/workflows/ci.yml/badge.svg)](https://github.com/Manacost-Labs/ParsesUnix/actions/workflows/ci.yml)
+![Python 3.11–3.13](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-> Status: free core (levels **L0–L2**) under active development. Paid providers
-> (L3–L4), the adaptive cost router, and the Rust L1 worker are deferred. See
-> [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
+**ParsesUnix — фреймворк для надёжного и экономного сбора данных из веба.**
 
-## Repository layout
+Он не «качает страницы». Он выбирает самый дешёвый маршрут, который *доказанно*
+отдаёт валидные данные: сначала структурированные источники, потом обычный HTTP,
+и только при доказанной блокировке — браузер. Каждый ответ проверяется на
+содержимое, каждый URL получает финальный вердикт, а рабочие маршруты
+запоминаются между прогонами.
 
-| Path | What it is |
+---
+
+## Зачем он нужен
+
+Обычный парсер ломается тихо. Он получает `200 OK`, сохраняет пустую страницу,
+и вы узнаёте об этом через неделю по кривым отчётам. ParsesUnix построен вокруг
+трёх утверждений:
+
+| Утверждение | Что это значит на практике |
 |---|---|
-| `src/web_scraper/` | The importable core: all logic lives here. |
-| `.agents/skills/` | Agent Skills — see below. |
-| `.claude/skills/` | Symlinks to the canonical skills (Claude Code picks them up here). |
-| `tests/` | `unittest` suite (standard library only) and saved-response fixtures. |
-| `docs/` | Implementation plan and research notes. |
-| `tools/` | Repo maintenance scripts (e.g. the provider-doc staleness check). |
+| **`200 OK` — это не успех** | Ответ проходит проверку содержимого. Челлендж-заглушка с кодом 200 — это `SOFT_BLOCK`, а не данные. |
+| **Ни один URL не теряется** | После прогона `unaccounted == 0`. Удалённая страница, упавший origin, стена авторизации — у каждого свой финальный вердикт, но никто не исчезает. |
+| **Деньги тратятся только по доказательству** | Платный провайдер включается лишь по вердикту `BLOCKED`/`SOFT_BLOCK`. Ошибки `404`, `5xx` и сломанные селекторы деньгами не лечатся. |
 
-The scripts under `.agents/skills/web-scraper/scripts/` are **thin CLI wrappers**;
-they re-export from `web_scraper` and contain no logic of their own.
+---
 
-## Skills
+## Ключевые особенности
 
-Each skill is canonical in `.agents/skills/<name>` and symlinked from
-`.claude/skills/`. The split rule: **deterministic logic lives in the package
-behind a `ws-*` command; a skill only says when and how to apply it.**
+- **Cost-aware routing** — лестница уровней от почти бесплатного к дорогому.
+- **Adaptive route memory** — система помнит, какая «дверь» реально открывается.
+- **Site Profiles** — декларативная настройка домена без правки кода.
+- **Retry по причине** — `429` ждёт `Retry-After`, `5xx` откладывается, блок ведёт к другому маршруту.
+- **Browser reconnaissance** — браузер ищет скрытый JSON API и уходит, оставляя дешёвый маршрут.
+- **Failure fingerprints** — знакомая защита узнаётся даже на новом домене.
+- **Quorum извлечения** — критичное поле сверяется из независимых источников.
+- **Atomic promote + LKG** — полупрогона не существует; старые данные помечены как старые.
+- **URL accounting** — сводимый до нуля реестр.
+- **Regression detection** — «сайт изменился» видно до того, как испортятся данные.
+- **Strict typing + CI** — `mypy --strict`, `ruff`, 317 тестов.
 
-*Domain skills (this project's own):*
+---
 
-| Skill | Answers | Tooling |
-|---|---|---|
-| `web-scraper` | how do I collect this site? | `ws-probe`, `ws-profile`, `ws-run` |
-| `scraper-regression` | what changed on the site? | `ws-regress` |
-| `scraper-debugger` | why is this run underperforming? | `ws-diagnose` |
+## Как это работает
 
-*Engineering-practice skills, vendored from MIT-licensed upstreams* (see
-[THIRD_PARTY.md](.agents/skills/THIRD_PARTY.md) for attribution and the
-project-specific conventions that override them): `karpathy-coder`,
-`test-driven-development`, `systematic-debugging`,
-`verification-before-completion`, `pr-review-expert`, `python-lint`,
-`python-typing`, `python-ci`.
-
-`tests/test_skills.py` validates every skill's frontmatter, symlink, relative
-links, and attribution, so a broken skill fails CI instead of failing silently.
-
-## Core concepts
-
-- **Verdicts** (`web_scraper.contracts.Verdict`): every response — including `200` —
-  is classified by `triage.classify_response` before any retry/escalation decision.
-- **Levels** L0 (JSON API / RSS / sitemap) → L1 (direct HTTP session) → L2 (browser)
-  → L3/L4 (paid providers). Only a `BLOCKED`/`SOFT_BLOCK` verdict may raise the level,
-  and never onto a paid level inside the free gateway.
-- **Site Profiles** (`web_scraper.profiles`): per-domain declarative config —
-  URL classes, canaries, routes, extractors, limits, freshness, promotion thresholds.
-  Validated with no network access; secrets/cookies/tokens are rejected.
-- **Fetch Gateway** (`web_scraper.fetchers.FetchGateway`): runs a URL through the
-  free routes of its profile class, triaging after every attempt.
-- **Adaptive routing** (`web_scraper.routing`): each attempt is recorded per
-  (domain, url_class, route, level), where success means a *validated* success,
-  never HTTP 200. A transparent policy — Wilson lower bound, EWMA, hysteresis,
-  shadow probes — reorders the profile's own routes from that history. Verdicts
-  that describe the resource or the server (`ORIGIN_DOWN`, `DEAD_URL`,
-  `RATE_LIMITED`, …) are neutral, so an outage can never push the ladder upward,
-  and paid levels are never the router's decision.
-
-## Install
-
-```bash
-pip install -e .
-# optional extras:
-pip install -e '.[yaml]'      # PyYAML (a built-in fallback parser works without it)
-pip install -e '.[browser]'   # Playwright — enables the L2 browser level
-pip install -e '.[http]'      # Scrapling transports (real L1/L2)
+```text
+                    URL
+                     │
+      ┌──────────────▼──────────────┐
+      │  L0  JSON API / RSS / карта │   почти бесплатно
+      │  L1  прямой HTTP-сеанс      │   дёшево
+      │  L2  локальный браузер      │   дорого по CPU
+      │  L3/L4  платный провайдер   │   деньги
+      └──────────────┬──────────────┘
+                     │  triage: вердикт после КАЖДОЙ попытки
+                     ▼
+              Валидация содержимого
+                     │
+                     ▼
+      Извлечение (JSON-LD → app state → meta → CSS → эвристика)
+                     │
+                     ▼
+         Staging → проверка целиком → атомарный promote
+                     │                        │
+                     ▼                        ▼
+              Чистые данные          Отказ: сохраняется LKG
 ```
 
-To enable **L2** (JavaScript rendering and CSR API reconnaissance) you also need
-the browser binary:
+**Это не тупая лестница сверху вниз.** Роутер помнит статистику по каждому
+маршруту и может поставить вперёд тот, который на этом сайте реально работает —
+но только среди бесплатных уровней. Платный уровень роутеру недоступен: решение
+о деньгах принимает исключительно `triage`.
+
+---
+
+## Быстрый старт
 
 ```bash
+git clone https://github.com/Manacost-Labs/ParsesUnix.git
+cd ParsesUnix
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -e .
+```
+
+Опционально — уровень L2 (рендеринг JavaScript и поиск скрытых API):
+
+```bash
+pip install -e '.[browser]'
 playwright install chromium
 ```
 
-Without it the core still runs: L2 routes are reported as skipped rather than
-failing a run, and browser tests skip automatically.
+Без браузера всё работает: маршруты L2 просто помечаются как пропущенные.
 
-Installing exposes console commands `ws-probe`, `ws-triage`, `ws-profile`, `ws-budget`.
-Without installing, the wrapper scripts locate the package via the repo layout or the
-`WEB_SCRAPER_SRC` environment variable (see `scripts/_bootstrap.py`).
+---
 
-## Usage
+## Первая разведка
 
 ```bash
-# Static reconnaissance of a new target (safe, bounded, SSRF-protected):
 ws-probe https://example.com/ --draft-profile draft.json
-
-# Validate a Site Profile before any network use:
-ws-profile validate .agents/skills/web-scraper/assets/templates/site-profile.yaml
-
-# Classify a saved response:
-ws-triage --status 200 --body-file page.html --canary '<article'
-
-# Run a scheduled crawl from a run config:
-ws-run run.json --report state/last-report.json
-
-# Did the site change under us? (exit 1 on a critical regression — gates CI)
-ws-regress --fixtures-dir tests/fixtures --profile profiles/example.yaml
-
-# Why is this run underperforming, and what is the correct remedy?
-ws-diagnose --state-dir state
 ```
 
-## Tests
+`ws-probe` безопасно смотрит на сайт и отвечает: SSR или CSR, есть ли RSS,
+sitemap, JSON-LD, скрытые API-подсказки, что говорит `robots.txt` и с какого
+уровня стоит начинать. Приватные и loopback-адреса заблокированы на каждом
+редиректе.
 
-Standard library only — no test dependencies:
+---
+
+## Site Profile
+
+Профиль описывает домен декларативно — как проверять ответ, какими маршрутами
+ходить, что извлекать:
+
+```yaml
+site: example.com
+authorization:
+  public_data_only: true
+
+url_classes:
+  article:
+    match: "^https://example\\.com/articles/"
+    validation:
+      min_body_bytes: 500
+      canary: "<article"            # без этой строки ответ не считается статьёй
+      required_fields: [title, published_at]
+    routes:
+      primary:
+        id: articles-api            # стабильная идентичность для статистики
+        type: json_api
+        level: L0
+        url: "https://example.com/api/articles"
+      alternatives:
+        - {type: direct_http, level: L1}
+        - {type: dynamic, level: L2}
+    extractors:
+      - {kind: json_ld, schema_type: Article}
+      - {kind: css, fields: {title: "h1::text", published_at: "time::attr(datetime)"}}
+    quorum_fields: [title]
+```
+
+Профиль проверяется **до** обращения к сети:
 
 ```bash
-python -m unittest discover -s tests -v
+ws-profile validate profiles/example.yaml
 ```
 
-## Deployment (debian-151)
+Секреты, cookies и токены в профиле запрещены — валидатор их отклоняет.
 
-The production target is a single Debian server driven by a systemd timer:
+---
 
-1. `git pull` on `debian-151`, then `pip install -e .`.
-2. A run configuration selects which URL groups, budget, and time window to process.
-3. A systemd timer triggers the run within the nightly window; state (SQLite queue,
-   snapshots) is local to the server.
+## Первый прогон
 
-Deployment units and the run loop land with Phase 2 of the plan; see
-`.agents/skills/web-scraper/references/` for the operational references.
+`run.json`:
 
-## Security & guardrails
+```json
+{
+  "profile": "profiles/example.yaml",
+  "state_dir": "state",
+  "seed_urls": ["https://example.com/articles/first"],
+  "deadline_seconds": 14400,
+  "batch_size": 20
+}
+```
 
-- Scrape only public or authorized data; never bypass authentication or paywalls.
-- Private, loopback, link-local, and cloud-metadata targets are blocked by default,
-  on every redirect hop.
-- Provider keys live in the environment or a secret store — never in code, profiles,
-  logs, snapshots, or reports.
-- `200 OK` is not success: content and extracted data are validated first.
+```bash
+ws-run run.json --report state/last-report.json
+```
 
-## License
+В отчёте — покрытие, вердикты по каждому URL, здоровье маршрутов, свежесть
+данных и нулевой `unaccounted`.
+
+---
+
+## Уровни L0–L4
+
+| Уровень | Что используется | Цена | Когда |
+|---|---|---|---|
+| **L0** | JSON API, RSS/Atom, sitemap, JSON-LD | почти ноль | всегда пробовать первым |
+| **L1** | Прямой HTTP-сеанс с прогревом и куками | дёшево | обычный SSR-сайт |
+| **L2** | Локальный браузер (Playwright) | дорого по CPU/RAM | нужен JS-рендеринг или доказан челлендж |
+| **L3** | Платный провайдер | деньги | L2 устойчиво не проходит |
+| **L4** | Residential / Web Unlocker | больше денег | исчерпано всё дешёвое, причина задокументирована |
+
+> Важное наблюдение из реальной приёмки: **L2 не «сильнее» L1**. Headless-браузер
+> легче распознаётся — на `hsreplay.net` обычный HTTP отдаёт страницу, а браузер
+> получает Turnstile. Поэтому лестница начинается снизу, а альтернативные
+> маршруты на том же уровне важнее подъёма.
+
+---
+
+## Надёжность
+
+**Triage** — единственный источник решений. Любой ответ, включая `200`, получает
+вердикт до того, как принято решение о повторе:
+
+| Вердикт | Что делает система | Платить? |
+|---|---|---|
+| `OK` | сохранить | не нужно |
+| `DEAD_URL` (404/410) | карантин | **нет** |
+| `ORIGIN_DOWN` (5xx) | отложенный повтор | **нет** |
+| `RATE_LIMITED` (429) | ждать `Retry-After`, снизить темп | **нет** |
+| `BLOCKED` / `SOFT_BLOCK` | другой маршрут → браузер | да, в рамках бюджета |
+| `THIN_CONTENT` | 2xx короче порога — проблема качества | **нет** |
+| `PARSE_FAIL` | чинить профиль, не сеть | **нет** |
+| `ACCESS_DENIED` / `AUTH_REQUIRED` | остановиться, не обходить | **нет** |
+
+**URL accounting.** Прогон завершается сведённым реестром: каждый входной URL
+находится ровно в одной корзине — обработан, перенесён на следующий прогон,
+в карантине или в мёртвой зоне. `unaccounted != 0` означает дефект системы.
+
+**LKG.** Если свежий прогон не удался, потребитель получает последние валидные
+данные — но **явно помеченными**: `STALE_LKG`, возраст и вердикт, из-за которого
+обновление не состоялось. Молча выдать старое за свежее нельзя.
+
+**Regression.** `ws-regress` сравнивает сохранённый эталон с текущим ответом:
+потерянные поля, переехавшие JSON-пути (с подсказкой замены), переход SSR→CSR,
+дрейф источника извлечения. При критичной регрессии — ненулевой код возврата.
+
+---
+
+## Adaptive routing
+
+Простыми словами: **система запоминает, какая дверь открывается**.
+
+Для каждой пары «класс страниц + маршрут» копится статистика: сколько было
+попыток, сколько закончилось *валидированным* успехом, какая задержка. Дальше
+маршруты переупорядочиваются по нижней границе доверительного интервала
+(Wilson), а не по сырой доле успехов — один удачный запрос из одного не обгонит
+двести из двухсот пяти.
+
+Три правила не дают этому сломаться:
+
+- **Отказ origin — нейтрален.** Если сайт лежит, маршрут в этом не виноват:
+  такие попытки не портят его оценку и не толкают лестницу вверх.
+- **Гистерезис.** Маршруты не меняются местами от шума.
+- **Shadow probes.** Изредка перепроверяется дешёвый маршрут, который история
+  считает мёртвым — так система возвращается вниз, когда сайт ослабил защиту.
+
+**Failure fingerprints** дополняют это: нормализованная «форма» отказа
+(вердикт, код, размер, маркеры челленджа, заголовки защиты) не зависит от
+домена. Если знакомая защита встречается на новом сайте, система сразу пробует
+маршрут, который уже помогал против неё.
+
+---
+
+## Безопасность
+
+- **SSRF-защита** на каждом хопе: приватные, loopback, link-local, CGNAT и
+  metadata-адреса заблокированы; адрес пиннится, чтобы исключить DNS-rebinding.
+- **Заголовки не утекают**: `Authorization` и `Cookie` вырезаются при редиректе
+  на другой хост.
+- **Никакого обхода авторизации** и контроля доступа — это терминальные вердикты.
+- **Редакция секретов**: тело снапшота, query-строка и заголовки чистятся перед
+  записью на диск.
+- **Бюджет** — обязательный шлюз для любого платного запроса.
+- **Профили без секретов** — валидатор отклоняет ключи, cookies и токены.
+
+---
+
+## Качество кода
+
+```bash
+ruff check src tests tools
+ruff format --check src tests tools
+mypy
+python -m unittest discover -s tests
+```
+
+Python 3.11–3.13. Рантайм — **только стандартная библиотека**; браузер, PyYAML и
+Scrapling остаются опциональными зависимостями. Тесты, требующие браузера,
+корректно пропускаются, если Playwright не установлен.
+
+---
+
+## Архитектура
+
+```text
+src/web_scraper/
+├── contracts.py      единые типы: Verdict, Level, Route, Attempt, Result
+├── triage.py         классификатор ответов (единственный источник вердиктов)
+├── profiles/         модель и валидатор Site Profile
+├── probe/            разведка: статическая + браузерная, SSRF-защита
+├── fetchers/         шлюз L0–L2, транспорты, сессии, пейсинг, circuit breaker
+├── routing/          статистика маршрутов и адаптивный роутер
+├── fingerprints/     нормализованные сигнатуры отказов и их восстановление
+├── queue/            SQLite-очередь: дедуп, checkpoint/resume, карантин
+├── extract/          цепочка экстракторов, кворум, нормализация
+├── publish/          staging → атомарный promote → LKG, статусы свежести
+├── freshness/        условные запросы и адаптивные интервалы
+├── observability/    метрики, учёт URL, отчёты, алерты
+├── regression/       диффы «эталон vs сейчас»
+├── diagnose/         группировка отказов и корректные средства
+└── run/              раннер прогона и CLI
+```
+
+---
+
+## Deployment
+
+Целевая среда — один сервер Debian с systemd-таймером. Юниты и инструкция —
+в [`deploy/`](deploy/README.md):
+
+```bash
+git pull && pip install --user -e .
+systemctl --user start web-scraper.service
+journalctl --user -u web-scraper.service -n 100
+```
+
+Состояние (очередь, датасет, свежесть, статистика маршрутов) переживает деплой;
+прогон, прерванный обновлением, продолжается с очереди без дублей.
+
+---
+
+## CLI
+
+| Команда | Назначение |
+|---|---|
+| `ws-probe` | разведка нового домена, черновик профиля |
+| `ws-profile` | валидация профиля (без сети) |
+| `ws-triage` | классификация сохранённого ответа |
+| `ws-run` | прогон по расписанию |
+| `ws-regress` | «сайт изменился?» — гейт для CI |
+| `ws-diagnose` | «почему прогон недобирает?» |
+| `ws-budget` | учёт платных запросов |
+
+---
+
+## Roadmap
+
+Реально незавершённое:
+
+- адаптеры платных провайдеров L3–L4 (интерфейс и предохранители готовы, ключей нет);
+- canary-прогон и полноценный drift-gate перед публикацией;
+- пул браузерных контекстов вместо запуска на URL;
+- бенчмарки и профилирование до решения о Rust-воркере.
+
+Подробности — в [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
+
+---
+
+## Лицензия
 
 [MIT](LICENSE).

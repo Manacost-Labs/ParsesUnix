@@ -49,9 +49,17 @@ def _strip_comment(line: str, line_no: int) -> str:
 
 
 def _split_inline_list(inner: str, line_no: int) -> list[str]:
+    """Split on commas at the top level only.
+
+    Depth matters: in ``{kind: css, fields: {title: a, date: b}}`` the comma
+    inside ``fields`` belongs to the nested mapping, and splitting on it would
+    tear the entry in half.
+    """
+
     items: list[str] = []
     current: list[str] = []
     quote: str | None = None
+    depth = 0
     for char in inner:
         if quote:
             current.append(char)
@@ -60,13 +68,23 @@ def _split_inline_list(inner: str, line_no: int) -> list[str]:
         elif char in {'"', "'"}:
             quote = char
             current.append(char)
-        elif char == ",":
+        elif char in "{[":
+            depth += 1
+            current.append(char)
+        elif char in "}]":
+            depth -= 1
+            if depth < 0:
+                raise YamlishError("unbalanced closing bracket", line_no)
+            current.append(char)
+        elif char == "," and depth == 0:
             items.append("".join(current).strip())
             current = []
         else:
             current.append(char)
     if quote:
         raise YamlishError("unterminated quoted string in inline list", line_no)
+    if depth:
+        raise YamlishError("unbalanced bracket in inline collection", line_no)
     tail = "".join(current).strip()
     if tail:
         items.append(tail)
@@ -88,9 +106,26 @@ def _parse_scalar(scalar: str, line_no: int) -> Any:
             raise YamlishError("inline list must close on the same line", line_no)
         return [_parse_scalar(item, line_no) for item in _split_inline_list(scalar[1:-1], line_no)]
     if scalar.startswith("{"):
-        if scalar == "{}":
+        # Single-line flow mappings of scalars, e.g. `{type: rss, level: L0}`.
+        # Extremely common in route and field lists, and unambiguous enough to
+        # parse exactly; anything nested still has to be written in block style.
+        if not scalar.endswith("}"):
+            raise YamlishError("flow mapping must close on the same line", line_no)
+        inner = scalar[1:-1].strip()
+        if not inner:
             return {}
-        raise YamlishError("flow mappings are not supported; use block style", line_no)
+        mapping: dict[str, Any] = {}
+        for item in _split_inline_list(inner, line_no):
+            key, separator, value = item.partition(":")
+            if not separator:
+                raise YamlishError(f"flow mapping entry {item!r} is missing ':'", line_no)
+            name = key.strip().strip("\"'")
+            if not name:
+                raise YamlishError("flow mapping key must not be empty", line_no)
+            if name in mapping:
+                raise YamlishError(f"duplicate key {name!r} in flow mapping", line_no)
+            mapping[name] = _parse_scalar(value.strip(), line_no)
+        return mapping
     if scalar.startswith(_UNSUPPORTED_LEAD):
         raise YamlishError(
             f"unsupported YAML feature at {scalar[:10]!r} (anchors, tags, and block scalars "
