@@ -1,0 +1,17 @@
+[Unit]
+Description=ParserUnix monthly full revision
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=debian
+WorkingDirectory=%h/ParsesUnix
+EnvironmentFile=-%h/.config/web-scraper/env
+ExecStart=%h/.local/bin/ws-run %h/.config/web-scraper/run.json --full-review --report %h/ParsesUnix/state/last-review.json
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/ParsesUnix/state %h/.config/web-scraper
+Nice=15

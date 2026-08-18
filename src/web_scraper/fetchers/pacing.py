@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import threading
 import time
 from typing import Callable, Mapping
 
@@ -47,21 +48,25 @@ class Pacer:
         self._clock = clock
         self._rng = rng
         self._last_request: dict[str, float] = {}
+        self._lock = threading.Lock()
 
     def pause(self, domain: str) -> float:
         """Wait until the polite interval (plus jitter) for the domain has passed."""
 
-        now = self._clock()
-        last = self._last_request.get(domain)
-        slept = 0.0
-        if last is not None:
-            due = last + self.min_interval_s + self._rng() * self.jitter_s
-            delay = due - now
-            if delay > 0:
-                self._sleep(delay)
-                slept = delay
-        self._last_request[domain] = self._clock()
-        return slept
+        # Reserve the slot under the lock (so concurrent domain workers do not
+        # both think they may go now), but sleep outside it.
+        with self._lock:
+            now = self._clock()
+            last = self._last_request.get(domain)
+            due = now
+            if last is not None:
+                due = last + self.min_interval_s + self._rng() * self.jitter_s
+            self._last_request[domain] = max(due, now)
+        delay = due - now
+        if delay > 0:
+            self._sleep(delay)
+            return delay
+        return 0.0
 
     def backoff(self, seconds: float) -> float:
         """Sleep a bounded backoff (used for Retry-After and origin failures)."""

@@ -1,0 +1,11 @@
+{
+  "profile": "profiles/example.yaml",
+  "state_dir": "state",
+  "seed_urls": [
+    "https://example.com/"
+  ],
+  "deadline_seconds": 14400,
+  "batch_size": 20,
+  "full_review": false,
+  "dead_zone_after_attempts": 3
+}

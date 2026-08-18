@@ -40,7 +40,7 @@ Build the cheapest reliable collection path that preserves data quality and repo
 
 - New site or unknown behavior: read `workflow.md`, `site-profile.md`, then run `probe.py`.
 - Errors, blocking, empty `200`, or unexpected cost: read `triage-and-retries.md` and `providers-and-stacks.md`.
-- Multi-page or scheduled production crawl: also read `reliability.md`.
+- Multi-page or scheduled production crawl: also read `reliability.md` and `scheduling.md`.
 - Cost optimization after stable operation: read `adaptive-routing.md`.
 - Any request involving credentials, internal URLs, personal data, or provider forwarding: read `security.md` before acting.
 
@@ -61,3 +61,5 @@ All scripts are thin CLI wrappers over the repository's importable core package 
 - `scripts/profile.py`: validate a Site Profile before any network use, or draft one from a saved probe report.
 - `scripts/budget.py`: SQLite-backed daily paid-request ledger.
 - `assets/templates/site-profile.yaml`: copy and tailor for each domain; never store secrets, cookies, or tokens in it — the validator rejects them.
+
+The importable package also provides the free run system: `web_scraper.run.Runner` (queue → gateway → freshness → extract → publish → report; `ws-run <run-config.json>`), `web_scraper.queue` (dedup/checkpoint/quarantine/dead-zones), `web_scraper.extract` (JSON-LD→app-state→meta→CSS→heuristic + quorum), `web_scraper.publish` (staging→atomic promote→LKG), `web_scraper.freshness` (conditional requests + adaptive interval), and `web_scraper.observability` (metrics/report/alerts). Deployment units for a nightly systemd timer live in `deploy/`.

@@ -23,6 +23,7 @@ class RunConfig:
     full_review: bool = False  # ignore freshness intervals; re-check everything
     allow_private: bool = False
     dead_zone_after_attempts: int = 3
+    sweep: bool = False  # phase-A HEAD sweep to quarantine dead URLs before the main pass
 
     @property
     def queue_path(self) -> Path:
@@ -62,4 +63,5 @@ class RunConfig:
             full_review=bool(data.get("full_review", False)),
             allow_private=bool(data.get("allow_private", False)),
             dead_zone_after_attempts=int(data.get("dead_zone_after_attempts", 3)),
+            sweep=bool(data.get("sweep", False)),
         )

@@ -85,6 +85,9 @@ class Runner:
         if due:
             self.queue.reactivate(due)
 
+        if self.config.sweep:
+            self._run_sweep()
+
         start = self._clock()
         processed = 0
         while True:
@@ -107,6 +110,23 @@ class Runner:
         )
         self._final_alerts(report.to_dict(), promote)
         return RunResult(report=report.to_dict(), promote=promote, processed=processed)
+
+    def _run_sweep(self) -> None:
+        """Phase-A HEAD sweep: quarantine 404/410 before the main pass."""
+
+        from web_scraper.fetchers.transports import UrllibTransport
+        from web_scraper.run.sweep import sweep_dead_urls
+
+        transport = UrllibTransport(allow_private=self.config.allow_private, use_cookies=False)
+        head = getattr(transport, "head", None)
+        if head is None:
+            return
+        pending = [row.url for row in self.queue.all_rows() if row.status.value in ("PENDING", "RETRY")]
+        sweep_dead_urls(
+            pending,
+            head=head,
+            quarantine=lambda u, s: self.queue.quarantine_url(u, status_code=s),
+        )
 
     # -- per-URL -----------------------------------------------------------
 

@@ -1,0 +1,24 @@
+[Unit]
+Description=ParserUnix free-core crawl (L0-L2)
+Documentation=https://github.com/Manacost-Labs/ParsesUnix
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=debian
+WorkingDirectory=%h/ParsesUnix
+# Optional secrets (Telegram token, etc.) — file lives outside the repo, 0600.
+EnvironmentFile=-%h/.config/web-scraper/env
+# The run config selects profile, state dir, URL groups, window, limits.
+ExecStart=%h/.local/bin/ws-run %h/.config/web-scraper/run.json --report %h/ParsesUnix/state/last-report.json
+# Hardening: the crawler needs no elevated access.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/ParsesUnix/state %h/.config/web-scraper
+Nice=10
+
+[Install]
+WantedBy=default.target

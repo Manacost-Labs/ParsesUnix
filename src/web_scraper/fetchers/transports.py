@@ -80,6 +80,26 @@ class UrllibTransport:
             allow_private=allow_private, resolver=resolver, cookie_processor=cookie_processor
         )
 
+    def head(self, url: str) -> int | None:
+        """Cheap liveness check for the sweep: returns the HTTP status, or None.
+
+        Used to quarantine 404/410 before the main pass (and, once paid providers
+        exist, before spending money on a dead URL).
+        """
+
+        validate_public_url(url, allow_private=self.allow_private, resolver=self.resolver)
+        request = Request(url, headers={"User-Agent": self.user_agent}, method="HEAD")
+        try:
+            with self._opener.open(request, timeout=self.timeout) as response:
+                validate_public_url(
+                    response.geturl(), allow_private=self.allow_private, resolver=self.resolver
+                )
+                return response.status
+        except HTTPError as exc:
+            return exc.code
+        except (URLError, TimeoutError, OSError):
+            return None
+
     def fetch(self, url: str, *, headers: Mapping[str, str] | None = None) -> RawResponse:
         validate_public_url(url, allow_private=self.allow_private, resolver=self.resolver)
         request_headers = {
