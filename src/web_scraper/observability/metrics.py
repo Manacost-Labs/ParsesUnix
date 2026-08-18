@@ -38,6 +38,8 @@ class RunMetrics:
     #: attributed is under-counted spend, so it is surfaced rather than dropped.
     unattributed_costs: int = 0
     per_domain: Counter[str] = field(default_factory=Counter)
+    #: Per-route health, straight from the route memory (see web_scraper.routing).
+    route_stats: list[dict[str, Any]] = field(default_factory=list)
 
     def observe(
         self,
@@ -87,6 +89,7 @@ class RunMetrics:
             "paid_calls": self.paid_calls,
             "unattributed_costs": self.unattributed_costs,
             "per_domain": dict(self.per_domain),
+            "route_stats": self.route_stats,
         }
 
 

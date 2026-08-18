@@ -49,6 +49,8 @@ from web_scraper.fetchers.transports import (
 )
 from web_scraper.probe.safety import Resolver, UnsafeTarget
 from web_scraper.profiles.model import SiteProfile, UrlClass
+from web_scraper.routing.router import AdaptiveRouter
+from web_scraper.routing.stats import RouteKey, RouteStatsStore
 from web_scraper.storage.snapshots import SnapshotStore
 from web_scraper.triage import classify_response
 
@@ -169,6 +171,8 @@ class FetchGateway:
         pacer: Pacer | None = None,
         snapshots: SnapshotStore | None = None,
         breaker: CircuitBreaker | None = None,
+        router: AdaptiveRouter | None = None,
+        route_stats: RouteStatsStore | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.profile = profile
@@ -176,6 +180,10 @@ class FetchGateway:
         self._pacer = pacer or Pacer()
         self._snapshots = snapshots
         self._breaker = breaker if breaker is not None else CircuitBreaker()
+        # Both are optional: without them the gateway behaves exactly as before,
+        # and the router with no statistics reproduces the declared plan anyway.
+        self._router = router
+        self._route_stats = route_stats
         self._clock = clock
 
     def fetch_url(self, url: str, *, extra_headers: dict[str, str] | None = None) -> GatewayOutcome:
@@ -206,7 +214,7 @@ class FetchGateway:
         final_verdict: Verdict | None = None
         final_response: RawResponse | None = None
 
-        plan = self._plan_routes(url_class, skipped)
+        plan = self._plan_routes(url_class, skipped, domain=domain)
         # The start level is set by the first route that actually executes;
         # after that, only a BLOCKED/SOFT_BLOCK verdict may raise it — up to the
         # highest free level. Cheapest-first ordering guarantees a cheaper route
@@ -243,6 +251,7 @@ class FetchGateway:
                     attempts=attempts,
                     snapshot_paths=snapshot_paths,
                     extra_headers=extra_headers,
+                    stats_domain=domain,
                 )
             except TransportUnavailable as exc:
                 skipped.append({"route": route.to_dict(), "reason": str(exc)})
@@ -295,8 +304,20 @@ class FetchGateway:
             snapshot_paths=tuple(snapshot_paths),
         )
 
-    def _plan_routes(self, url_class: UrlClass, skipped: list[dict[str, Any]]) -> list[Route]:
-        """Primary first, then alternatives cheapest-first; paid routes are reported, never run."""
+    def _plan_routes(
+        self,
+        url_class: UrlClass,
+        skipped: list[dict[str, Any]],
+        *,
+        domain: str = "",
+    ) -> list[Route]:
+        """Primary first, then alternatives cheapest-first; paid routes are reported, never run.
+
+        When a router is configured it may reorder this plan from what past runs
+        actually achieved. It can only reorder — the paid-route exclusion and the
+        deduplication below still apply, and with no statistics the router
+        returns exactly this order.
+        """
 
         ordered = [
             url_class.primary_route,
@@ -319,7 +340,34 @@ class FetchGateway:
                 continue
             seen.add(key)
             plan.append(route)
-        return plan
+
+        if self._router is None or not plan:
+            return plan
+        return self._router.order(plan, domain=domain, url_class=url_class.name)
+
+    def _record_route_stats(
+        self,
+        *,
+        route: Route,
+        url_class: UrlClass,
+        domain: str,
+        triage: TriageResult,
+        latency_ms: float | None,
+    ) -> None:
+        """Feed one attempt's outcome back into route memory."""
+
+        if self._route_stats is None:
+            return
+        self._route_stats.record(
+            RouteKey(
+                domain=domain,
+                url_class=url_class.name,
+                route_type=route.type.value,
+                level=route.level.value,
+            ),
+            verdict=triage.verdict,
+            latency_ms=latency_ms,
+        )
 
     def _attempt_with_retries(
         self,
@@ -331,6 +379,7 @@ class FetchGateway:
         attempts: list[Attempt],
         snapshot_paths: list[str],
         extra_headers: dict[str, str] | None = None,
+        stats_domain: str = "",
     ) -> tuple[TriageResult, RawResponse | None]:
         max_attempts = int(url_class.retry.get("max_attempts", 2))
         backoff_seconds = float(url_class.retry.get("backoff_seconds", 5))
@@ -360,6 +409,15 @@ class FetchGateway:
                 headers=response.headers,
                 rules=rules,
                 transport_error=response.transport_error,
+            )
+            # Every attempt feeds route memory, including the retries: a route
+            # that only works on the second try is genuinely less reliable.
+            self._record_route_stats(
+                route=route,
+                url_class=url_class,
+                domain=stats_domain or domain,
+                triage=triage,
+                latency_ms=elapsed_ms,
             )
             if self._snapshots is not None:
                 path = self._snapshots.save(

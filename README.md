@@ -59,6 +59,13 @@ links, and attribution, so a broken skill fails CI instead of failing silently.
   Validated with no network access; secrets/cookies/tokens are rejected.
 - **Fetch Gateway** (`web_scraper.fetchers.FetchGateway`): runs a URL through the
   free routes of its profile class, triaging after every attempt.
+- **Adaptive routing** (`web_scraper.routing`): each attempt is recorded per
+  (domain, url_class, route, level), where success means a *validated* success,
+  never HTTP 200. A transparent policy — Wilson lower bound, EWMA, hysteresis,
+  shadow probes — reorders the profile's own routes from that history. Verdicts
+  that describe the resource or the server (`ORIGIN_DOWN`, `DEAD_URL`,
+  `RATE_LIMITED`, …) are neutral, so an outage can never push the ladder upward,
+  and paid levels are never the router's decision.
 
 ## Install
 

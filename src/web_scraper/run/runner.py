@@ -30,6 +30,8 @@ from web_scraper.profiles.model import SiteProfile, UrlClass
 from web_scraper.publish import DatasetStore
 from web_scraper.queue import QueueStore, normalize_url
 from web_scraper.queue.store import QueuedUrl
+from web_scraper.routing import RouteStatsStore
+from web_scraper.routing.router import AdaptiveRouter
 from web_scraper.run.config import RunConfig
 from web_scraper.storage.snapshots import SnapshotStore
 
@@ -63,11 +65,16 @@ class Runner:
         self.dataset = DatasetStore(config.dataset_path, now=wall_clock)
         self.freshness = FreshnessStore(config.freshness_path, now=wall_clock)
         self.snapshots = SnapshotStore(config.snapshot_dir, now=wall_clock)
+        self.route_stats = RouteStatsStore(config.route_stats_path, now=wall_clock)
         self.alerter = alerter or LoggingAlerter()
         self.metrics = RunMetrics()
         self._clock = clock
         self._gateway = gateway or FetchGateway(
-            self.profile, snapshots=self.snapshots, breaker=CircuitBreaker()
+            self.profile,
+            snapshots=self.snapshots,
+            breaker=CircuitBreaker(),
+            route_stats=self.route_stats,
+            router=AdaptiveRouter(self.route_stats) if config.adaptive_routing else None,
         )
         self._results: list[Result] = []
 
@@ -124,6 +131,7 @@ class Runner:
                     context=accounting.to_dict(),
                 )
             )
+        self.metrics.route_stats = [stats.to_dict() for stats in self.route_stats.all_stats()]
         report = build_report(
             self._results,
             metrics=self.metrics,
