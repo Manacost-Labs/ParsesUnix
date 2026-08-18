@@ -21,6 +21,7 @@ from web_scraper.contracts import Result, Verdict
 from web_scraper.extract import extract_fields, run_quorum
 from web_scraper.fetchers import CircuitBreaker, FetchGateway, RawResponse
 from web_scraper.fetchers.gateway import GatewayOutcome
+from web_scraper.fingerprints import FingerprintStore
 from web_scraper.freshness import FreshnessStore
 from web_scraper.observability import Alerter, AlertEvent, LoggingAlerter, RunMetrics
 from web_scraper.observability.accounting import build_accounting
@@ -66,6 +67,7 @@ class Runner:
         self.freshness = FreshnessStore(config.freshness_path, now=wall_clock)
         self.snapshots = SnapshotStore(config.snapshot_dir, now=wall_clock)
         self.route_stats = RouteStatsStore(config.route_stats_path, now=wall_clock)
+        self.fingerprints = FingerprintStore(config.fingerprints_path, now=wall_clock)
         self.alerter = alerter or LoggingAlerter()
         self.metrics = RunMetrics()
         self._clock = clock
@@ -74,6 +76,7 @@ class Runner:
             snapshots=self.snapshots,
             breaker=CircuitBreaker(),
             route_stats=self.route_stats,
+            fingerprints=self.fingerprints,
             router=AdaptiveRouter(self.route_stats) if config.adaptive_routing else None,
         )
         self._results: list[Result] = []

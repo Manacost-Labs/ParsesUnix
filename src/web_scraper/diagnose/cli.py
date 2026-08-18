@@ -24,6 +24,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     source.add_argument("--attempts-json", type=Path, help="JSON list of attempt records.")
 
     parser.add_argument("--limit", type=int, default=5000)
+    parser.add_argument(
+        "--fingerprints",
+        type=Path,
+        help="Fingerprint database to report known failure shapes from.",
+    )
     parser.add_argument("--samples", type=int, default=3, help="Sample URLs per group.")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)

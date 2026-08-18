@@ -233,3 +233,79 @@ class RunnerRoutingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FingerprintIntegrationTests(unittest.TestCase):
+    """A recognised failure may reorder routes — and nothing more."""
+
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        from web_scraper.fingerprints import FingerprintStore
+
+        self.prints = FingerprintStore(Path(self.tempdir.name) / "f.sqlite3", now=lambda: 5.0)
+        self.calls: list[str] = []
+
+    def gateway(self, profile, by_level: dict[str, str]):
+        def provider(route, url_class, url):
+            return TrackingTransport(by_level, self.calls, route.level.value)
+
+        return FetchGateway(
+            profile,
+            transport_provider=provider,
+            pacer=NoWaitPacer(),
+            fingerprints=self.prints,
+        )
+
+    def test_a_failure_and_its_recovery_are_both_learned(self) -> None:
+        profile = profile_with(L1_PRIMARY, [L2_ALT])
+        outcome = self.gateway(profile, {"L1": "blocked", "L2": "success"}).fetch_url(PAGE)
+        self.assertEqual(outcome.result.verdict, Verdict.OK)
+
+        records = self.prints.all_records()
+        self.assertEqual(len(records), 1)
+        learned = records[0]
+        self.assertEqual(learned.verdict, "BLOCKED")
+        self.assertIn("direct_http", learned.routes_seen)
+        # The browser is remembered as what got past this shape.
+        self.assertEqual(learned.best_recovery, "dynamic")
+
+    def test_a_recognised_failure_reaches_the_working_route_sooner(self) -> None:
+        profile = profile_with(
+            L1_PRIMARY,
+            [
+                {"type": "json_api", "level": "L0", "url": "https://demo-news.example/api/x"},
+                L2_ALT,
+            ],
+        )
+        # First encounter: L1 blocked, the L0 mirror is useless, the browser works.
+        self.gateway(profile, {"L1": "blocked", "L0": "blocked", "L2": "success"}).fetch_url(PAGE)
+        first_pass = list(self.calls)
+        self.assertEqual(first_pass, ["L1", "L0", "L2"])
+
+        # Second encounter: the same shape is recognised after the first failure,
+        # so the known recovery route is tried next instead of the dead mirror.
+        self.calls.clear()
+        self.gateway(profile, {"L1": "blocked", "L0": "blocked", "L2": "success"}).fetch_url(PAGE)
+        self.assertEqual(self.calls, ["L1", "L2"])
+
+    def test_a_hint_cannot_unlock_a_level_the_policy_forbids(self) -> None:
+        # Teach a recovery at L2, then present a verdict that never unlocks L2.
+        profile = profile_with(L1_PRIMARY, [L2_ALT])
+        self.gateway(profile, {"L1": "blocked", "L2": "success"}).fetch_url(PAGE)
+        self.calls.clear()
+
+        # PARSE_FAIL is route-relevant but must never raise the level.
+        outcome = self.gateway(profile, {"L1": "redesigned", "L2": "success"}).fetch_url(PAGE)
+        self.assertEqual(self.calls, ["L1"])
+        self.assertEqual(outcome.result.verdict, Verdict.PARSE_FAIL)
+        reasons = " ".join(s["reason"] for s in outcome.skipped_routes)
+        self.assertIn("escalation is not justified", reasons)
+
+    def test_a_hint_never_introduces_a_paid_route(self) -> None:
+        profile = profile_with(
+            L1_PRIMARY, [{"type": "provider", "level": "L3", "provider": "scrape.do"}]
+        )
+        outcome = self.gateway(profile, {"L1": "blocked"}).fetch_url(PAGE)
+        self.assertEqual(self.calls, ["L1"])
+        self.assertTrue(outcome.paid_escalation_candidate)

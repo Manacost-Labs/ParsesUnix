@@ -47,6 +47,7 @@ from web_scraper.fetchers.transports import (
     ScraplingStealthyTransport,
     UrllibTransport,
 )
+from web_scraper.fingerprints import FailureFingerprint, FingerprintStore, fingerprint_attempt
 from web_scraper.probe.safety import Resolver, UnsafeTarget
 from web_scraper.profiles.model import SiteProfile, UrlClass
 from web_scraper.routing.router import AdaptiveRouter
@@ -173,6 +174,7 @@ class FetchGateway:
         breaker: CircuitBreaker | None = None,
         router: AdaptiveRouter | None = None,
         route_stats: RouteStatsStore | None = None,
+        fingerprints: FingerprintStore | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.profile = profile
@@ -184,6 +186,7 @@ class FetchGateway:
         # and the router with no statistics reproduces the declared plan anyway.
         self._router = router
         self._route_stats = route_stats
+        self._fingerprints = fingerprints
         self._clock = clock
 
     def fetch_url(self, url: str, *, extra_headers: dict[str, str] | None = None) -> GatewayOutcome:
@@ -215,13 +218,19 @@ class FetchGateway:
         final_response: RawResponse | None = None
 
         plan = self._plan_routes(url_class, skipped, domain=domain)
+        first_failure: FailureFingerprint | None = None
         # The start level is set by the first route that actually executes;
         # after that, only a BLOCKED/SOFT_BLOCK verdict may raise it — up to the
         # highest free level. Cheapest-first ordering guarantees a cheaper route
         # is still tried before an unlocked more expensive one.
         unlocked_rank: int | None = None
 
-        for route in plan:
+        # An explicit queue rather than `for route in plan`: recognising a failure
+        # may reorder the routes that have not run yet, and rebinding the name a
+        # for-loop is iterating would silently have no effect.
+        remaining = list(plan)
+        while remaining:
+            route = remaining.pop(0)
             if unlocked_rank is not None and route.level.rank > unlocked_rank:
                 skipped.append(
                     {
@@ -267,6 +276,31 @@ class FetchGateway:
             unlocked_rank = max(unlocked_rank or 0, route.level.rank)
             final_verdict = triage.verdict
             final_response = response
+
+            if triage.verdict is Verdict.OK:
+                # A route that got past a failure we recognise is the most useful
+                # thing we can learn: record it against that failure's shape.
+                if first_failure is not None and self._fingerprints is not None:
+                    self._fingerprints.record_recovery(
+                        first_failure.digest, route_id=route.route_id
+                    )
+            elif response is not None and self._fingerprints is not None:
+                shape = fingerprint_attempt(
+                    verdict=triage.verdict,
+                    status=response.status,
+                    body=response.body,
+                    headers=response.headers,
+                    transport_error=response.transport_error,
+                    domain=domain,
+                    url_class=url_class.name,
+                )
+                self._fingerprints.record_failure(shape, route_id=route.route_id)
+                if first_failure is None:
+                    first_failure = shape
+                    # Recognised failure: try the route that historically recovers
+                    # it next. This only reorders what the plan already allows —
+                    # the escalation policy below still gates every level.
+                    remaining = self._prefer_recovery_route(remaining, shape)
             if triage.verdict is Verdict.OK:
                 break
             if triage.verdict in _TERMINAL_VERDICTS:
@@ -344,6 +378,27 @@ class FetchGateway:
         if self._router is None or not plan:
             return plan
         return self._router.order(plan, domain=domain, url_class=url_class.name)
+
+    def _prefer_recovery_route(
+        self, remaining: list[Route], shape: FailureFingerprint
+    ) -> list[Route]:
+        """Move a historically-recovering route to the front of what is left.
+
+        This is a *hint*, not a decision: it only reorders routes the plan already
+        contains, so the paid exclusion and the escalation policy still apply
+        unchanged. A fingerprint can make us reach the working door sooner; it can
+        never open a door policy has closed.
+        """
+
+        if self._fingerprints is None or len(remaining) < 2:
+            return remaining
+        hint = self._fingerprints.recovery_hint(shape)
+        if hint is None:
+            return remaining
+        preferred = next((r for r in remaining if r.route_id == hint.route_id), None)
+        if preferred is None:
+            return remaining
+        return [preferred, *(r for r in remaining if r is not preferred)]
 
     def _record_route_stats(
         self,

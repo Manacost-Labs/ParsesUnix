@@ -44,6 +44,10 @@ class RunConfig:
         return self.state_dir / "route_stats.sqlite3"
 
     @property
+    def fingerprints_path(self) -> Path:
+        return self.state_dir / "fingerprints.sqlite3"
+
+    @property
     def snapshot_dir(self) -> Path:
         return self.state_dir / "snapshots"
 
