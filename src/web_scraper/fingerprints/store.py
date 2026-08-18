@@ -192,10 +192,15 @@ class FingerprintStore:
         cheapest knowledge in the system and cost a single row each.
         """
 
+        # Two complete statements rather than one assembled from fragments: SQL
+        # built by string concatenation is a habit worth not having, even when
+        # every fragment is a literal.
         cutoff = self._now() - max_age_days * 86_400
-        clause = "last_seen < ?"
-        if keep_with_recoveries:
-            clause += " AND successful_recovery_count = 0"
+        statement = (
+            "DELETE FROM fingerprints WHERE last_seen < ? AND successful_recovery_count = 0"
+            if keep_with_recoveries
+            else "DELETE FROM fingerprints WHERE last_seen < ?"
+        )
         with closing(self._connect()) as conn, conn:
-            cursor = conn.execute(f"DELETE FROM fingerprints WHERE {clause}", (cutoff,))
+            cursor = conn.execute(statement, (cutoff,))
             return int(cursor.rowcount)
