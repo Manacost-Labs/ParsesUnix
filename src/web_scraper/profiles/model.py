@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import urlsplit
 
 from web_scraper.contracts import ContentRules, Level, Route, RouteType
 
@@ -147,7 +148,32 @@ def _section(
     return merged
 
 
-def _parse_route(raw: Any, path: str, ctx: _Ctx) -> Route | None:
+def _registrable_domain(host: str) -> str:
+    return ".".join(host.lower().rsplit(".", 2)[-2:])
+
+
+def _validate_route_url(url: Any, site: str, path: str, ctx: _Ctx) -> None:
+    if url is None:
+        return  # a route without a URL fetches the target itself
+    if not isinstance(url, str) or not url:
+        ctx.err(f"{path}.url", "must be a non-empty string")
+        return
+    parts = urlsplit(url)
+    if parts.scheme not in {"http", "https"}:
+        ctx.err(f"{path}.url", "must be an absolute http(s) URL, not a relative path")
+        return
+    if not parts.hostname:
+        ctx.err(f"{path}.url", "is missing a hostname")
+        return
+    if site and _registrable_domain(parts.hostname) != _registrable_domain(site):
+        ctx.err(
+            f"{path}.url",
+            f"host {parts.hostname!r} does not belong to site {site!r}; "
+            "routes must not point at a third-party host",
+        )
+
+
+def _parse_route(raw: Any, path: str, ctx: _Ctx, *, site: str = "") -> Route | None:
     if not isinstance(raw, Mapping):
         ctx.err(path, "route must be a mapping")
         return None
@@ -162,6 +188,7 @@ def _parse_route(raw: Any, path: str, ctx: _Ctx) -> Route | None:
     except ValueError:
         ctx.err(f"{path}.level", f"unknown level {raw.get('level')!r}; expected L0..L4")
         return None
+    _validate_route_url(raw.get("url"), site, path, ctx)
     try:
         return Route(
             type=route_type,
@@ -264,7 +291,7 @@ class SiteProfile:
         return next((cls for cls in self.url_classes.values() if cls.matches(url)), None)
 
 
-def _parse_url_class(name: str, raw: Any, ctx: _Ctx) -> UrlClass | None:
+def _parse_url_class(name: str, raw: Any, ctx: _Ctx, *, site: str = "") -> UrlClass | None:
     path = f"url_classes.{name}"
     if not isinstance(raw, Mapping):
         ctx.err(path, "must be a mapping")
@@ -338,11 +365,15 @@ def _parse_url_class(name: str, raw: Any, ctx: _Ctx) -> UrlClass | None:
         required_json_paths = _string_list(
             validation.get("required_json_paths"), f"{path}.validation.required_json_paths", ctx
         )
-        if not (canaries or required_fields or required_json_paths):
+        # required_fields is enforced by the extraction layer, not by triage, so
+        # it does NOT count as a triage-checkable content proof. Without a canary
+        # or a required JSON path, triage would accept any >= min_body_bytes body.
+        if not (canaries or required_json_paths):
             ctx.err(
                 f"{path}.validation",
-                "needs at least one content proof: canary/canaries, required_fields, "
-                "or required_json_paths",
+                "needs a triage-checkable content proof: canary/canaries or "
+                "required_json_paths (required_fields alone is not enough — it is "
+                "checked by extraction, not triage)",
             )
 
     routes_raw = raw.get("routes")
@@ -352,13 +383,13 @@ def _parse_url_class(name: str, raw: Any, ctx: _Ctx) -> UrlClass | None:
         ctx.err(f"{path}.routes", "is required with a primary route")
     else:
         _check_unknown(routes_raw, {"primary", "alternatives"}, f"{path}.routes", ctx)
-        primary_route = _parse_route(routes_raw.get("primary"), f"{path}.routes.primary", ctx)
+        primary_route = _parse_route(routes_raw.get("primary"), f"{path}.routes.primary", ctx, site=site)
         alternatives_raw = routes_raw.get("alternatives") or []
         if not isinstance(alternatives_raw, list):
             ctx.err(f"{path}.routes.alternatives", "must be a list of routes")
         else:
             for index, item in enumerate(alternatives_raw):
-                route = _parse_route(item, f"{path}.routes.alternatives[{index}]", ctx)
+                route = _parse_route(item, f"{path}.routes.alternatives[{index}]", ctx, site=site)
                 if route is not None:
                     alternative_routes.append(route)
 
@@ -460,13 +491,60 @@ def parse_profile(data: Any) -> SiteProfile:
         ctx.err("url_classes", "is required and must contain at least one URL class")
     else:
         for name, raw in classes_raw.items():
-            parsed = _parse_url_class(str(name), raw, ctx)
+            parsed = _parse_url_class(str(name), raw, ctx, site=str(site))
             if parsed is not None:
                 url_classes[str(name)] = parsed
+        # Only meaningful once every pattern compiled cleanly.
+        if not ctx.errors and len(url_classes) > 1:
+            _check_class_overlap(url_classes, ctx)
 
     if ctx.errors:
         raise ProfileError(ctx.errors)
     return SiteProfile(site=str(site), url_classes=url_classes)
+
+
+#: Sample paths used to detect ambiguous (overlapping) url-class patterns.
+_OVERLAP_PROBES = (
+    "/",
+    "/index.html",
+    "/articles/sample-story",
+    "/api/v1/items/1",
+    "/catalog/page/2",
+    "/feed",
+    "/2026/08/18/news",
+    "/products/42",
+)
+
+
+_PATTERN_HOST_RE = re.compile(r"\^?(https?)://([^/(\[]+)")
+
+
+def _pattern_host(pattern: str) -> str | None:
+    match = _PATTERN_HOST_RE.match(pattern)
+    if not match:
+        return None
+    return f"{match.group(1)}://{match.group(2).replace(chr(92), '')}"
+
+
+def _check_class_overlap(url_classes: Mapping[str, UrlClass], ctx: _Ctx) -> None:
+    """Flag patterns that both match a probe path: match order would be ambiguous."""
+
+    site_host = next(
+        (host for cls in url_classes.values() if (host := _pattern_host(cls.match_pattern))), ""
+    )
+    for probe in _OVERLAP_PROBES:
+        candidate = f"{site_host}{probe}" if site_host else probe
+        try:
+            matched = [name for name, cls in url_classes.items() if cls.matches(candidate)]
+        except re.error:
+            return  # a bad regex is already reported elsewhere
+        if len(matched) > 1:
+            ctx.err(
+                "url_classes",
+                f"patterns for {sorted(matched)} both match {candidate!r}; "
+                "make the match regexes mutually exclusive (class order is not a tie-breaker)",
+            )
+            return
 
 
 def _load_yaml(text: str) -> Any:

@@ -23,16 +23,26 @@ class YamlishError(ValueError):
         self.line_no = line_no
 
 
+#: Characters after which a quote begins a quoted scalar (value/item/flow start).
+_VALUE_START_CHARS = frozenset({":", ",", "[", "-", "{"})
+
+
 def _strip_comment(line: str, line_no: int) -> str:
     quote: str | None = None
+    prev_significant: str | None = None
     for index, char in enumerate(line):
         if quote:
             if char == quote:
                 quote = None
         elif char in {'"', "'"}:
-            quote = char
+            # A quote only opens a quoted scalar at a value/item boundary; a
+            # quote in the middle of a plain scalar (e.g. "it's fine") is literal.
+            if prev_significant is None or prev_significant in _VALUE_START_CHARS:
+                quote = char
         elif char == "#" and (index == 0 or line[index - 1] in " \t"):
             return line[:index]
+        if char not in " \t":
+            prev_significant = char
     if quote:
         raise YamlishError("unterminated quoted string", line_no)
     return line

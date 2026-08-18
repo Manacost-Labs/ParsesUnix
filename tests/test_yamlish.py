@@ -59,5 +59,43 @@ class YamlishTests(unittest.TestCase):
             loads("a: 1\na: 2\n")
 
 
+    def test_apostrophe_in_plain_scalar_is_literal(self) -> None:
+        data = loads("notes: it's fine  # trailing\n")
+        self.assertEqual(data["notes"], "it's fine")
+
+    def test_apostrophe_plain_scalar_with_hash_word(self) -> None:
+        data = loads("a: don't  # c\nb: 2\n")
+        self.assertEqual(data["a"], "don't")
+        self.assertEqual(data["b"], 2)
+
+    def test_quoted_value_still_parses_after_apostrophe_fix(self) -> None:
+        data = loads("m: 'hello world'\n")
+        self.assertEqual(data["m"], "hello world")
+
+
+class YamlishPyYAMLDifferentialTests(unittest.TestCase):
+    """When PyYAML is present, yamlish must agree on the profile subset."""
+
+    def setUp(self) -> None:
+        try:
+            import yaml  # noqa: F401
+        except ImportError:
+            self.skipTest("PyYAML not installed")
+
+    def test_matches_pyyaml_on_subset(self) -> None:
+        import yaml
+        doc = (
+            "site: demo.example\n"
+            "authorization:\n"
+            "  public_data_only: true\n"
+            "list: [a, \"b,c\", 2]\n"
+            "nested:\n"
+            "  n: -3.5\n"
+            "  s: \"^https://x\\\\.y/\"\n"
+            "  empty: null\n"
+        )
+        self.assertEqual(loads(doc), yaml.safe_load(doc))
+
+
 if __name__ == "__main__":
     unittest.main()

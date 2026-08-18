@@ -133,5 +133,56 @@ class ProfileSecretTests(unittest.TestCase):
         parse_profile(minimal_profile())  # must not raise
 
 
+
+
+class ProfileRouteAndOverlapTests(unittest.TestCase):
+    def test_third_party_route_url_is_rejected(self) -> None:
+        data = minimal_profile()
+        data["url_classes"]["article"]["routes"]["alternatives"] = [
+            {"type": "json_api", "level": "L0", "url": "https://evil.example/api/x"}
+        ]
+        with self.assertRaises(ProfileError) as caught:
+            parse_profile(data)
+        self.assertTrue(any("does not belong to site" in e for e in caught.exception.errors))
+
+    def test_relative_route_url_is_rejected(self) -> None:
+        data = minimal_profile()
+        data["url_classes"]["article"]["routes"]["alternatives"] = [
+            {"type": "json_api", "level": "L0", "url": "/api/x"}
+        ]
+        with self.assertRaises(ProfileError) as caught:
+            parse_profile(data)
+        self.assertTrue(any("absolute http(s)" in e for e in caught.exception.errors))
+
+    def test_same_site_subdomain_route_is_accepted(self) -> None:
+        data = minimal_profile()
+        data["url_classes"]["article"]["routes"]["alternatives"] = [
+            {"type": "json_api", "level": "L0", "url": "https://api.demo-news.example/v1/{id}"}
+        ]
+        parse_profile(data)  # must not raise
+
+    def test_required_fields_alone_is_not_a_content_proof(self) -> None:
+        data = minimal_profile()
+        data["url_classes"]["article"]["validation"] = {
+            "min_body_bytes": 200,
+            "required_fields": ["title"],
+        }
+        with self.assertRaises(ProfileError) as caught:
+            parse_profile(data)
+        self.assertTrue(any("content proof" in e for e in caught.exception.errors))
+
+    def test_overlapping_classes_are_rejected(self) -> None:
+        data = minimal_profile()
+        data["url_classes"]["catchall"] = {
+            "match": "^https://demo-news\\.example/",  # matches everything the article class does
+            "validation": {"canary": "x"},
+            "routes": {"primary": {"type": "direct_http", "level": "L1"}},
+            "extractors": [{"kind": "heuristic"}],
+        }
+        with self.assertRaises(ProfileError) as caught:
+            parse_profile(data)
+        self.assertTrue(any("both match" in e for e in caught.exception.errors))
+
+
 if __name__ == "__main__":
     unittest.main()

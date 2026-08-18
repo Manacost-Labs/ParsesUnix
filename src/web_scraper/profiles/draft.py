@@ -12,9 +12,14 @@ from urllib.parse import urlsplit
 
 from web_scraper.profiles.model import parse_profile
 
+#: Placeholder content proof. It will not match any real page, so a draft fails
+#: closed (PARSE_FAIL) until a reviewer sets a real canary / required JSON path.
+CANARY_PLACEHOLDER = "__SET_CONTENT_CANARY__"
+
 DRAFT_NOTES = (
-    "draft generated from a probe report; review the match pattern, canaries, "
-    "selectors, and routes before production use"
+    "draft generated from a probe report; the content proof is a placeholder that "
+    "fails closed — replace canary/required_json_paths, then review the match "
+    "pattern, selectors, and routes before production use"
 )
 
 
@@ -91,6 +96,19 @@ def draft_profile_from_probe(
         extractors.append({"kind": "meta", "fields": meta_fields})
     extractors.append({"kind": "heuristic"})
 
+    # A draft must ship a triage-checkable content proof, not just required_fields
+    # (which the extraction layer enforces, not triage). We fail closed with a
+    # placeholder canary the reviewer MUST replace, so the draft never silently
+    # accepts an arbitrary >=200-byte body as OK.
+    validation: dict[str, Any] = {
+        "min_body_bytes": 200,
+        "required_fields": list(required_fields),
+    }
+    if expected == "json":
+        validation["required_json_paths"] = [CANARY_PLACEHOLDER]
+    else:
+        validation["canary"] = CANARY_PLACEHOLDER
+
     profile = {
         "site": parts.hostname or "",
         "authorization": {"public_data_only": True},
@@ -99,10 +117,7 @@ def draft_profile_from_probe(
             url_class: {
                 "match": _match_pattern(final_url),
                 "expected_content_type": expected,
-                "validation": {
-                    "min_body_bytes": 200,
-                    "required_fields": list(required_fields),
-                },
+                "validation": validation,
                 "routes": {
                     "primary": primary,
                     "alternatives": alternatives,

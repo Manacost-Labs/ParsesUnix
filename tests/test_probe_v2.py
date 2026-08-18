@@ -104,7 +104,9 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(rendering["classification"], "hybrid")
 
     def test_api_hints_include_graphql(self) -> None:
-        hints = analysis.extract_api_hints('fetch("/graphql/query?op=Articles")')
+        hints = analysis.extract_api_hints(
+            'fetch("/graphql/query?op=Articles")', "https://demo.example/page"
+        )
         self.assertTrue(hints["graphql"])
 
 
@@ -215,6 +217,22 @@ class DraftProfileTests(unittest.TestCase):
         self.assertEqual(kinds[0], "json_ld")
         self.assertIn("meta", kinds)
 
+    def test_draft_fails_closed_until_canary_is_set(self) -> None:
+        from web_scraper.triage import classify_response
+        from web_scraper.contracts import Verdict
+
+        report = self.build_report("success")
+        draft = draft_profile_from_probe(report, url_class="article", required_fields=("title",))
+        profile = parse_profile(draft)
+        rules = profile.url_classes["article"].content_rules()
+        saved = load_saved_response(FIXTURES / "success")
+        # The placeholder canary is not in any real page, so the draft rejects
+        # the very body it was drafted from until a human sets a real canary.
+        result = classify_response(
+            status=200, body=saved.body, headers={"Content-Type": "text/html"}, rules=rules
+        )
+        self.assertEqual(result.verdict, Verdict.PARSE_FAIL)
+
     def test_draft_from_csr_report_starts_at_l2(self) -> None:
         report = self.build_report("csr-shell")
         draft = draft_profile_from_probe(report, url_class="catalog")
@@ -235,3 +253,22 @@ class DraftProfileTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ApiHintSafetyTests(unittest.TestCase):
+    def test_relative_hint_is_made_absolute_same_site(self) -> None:
+        hints = analysis.extract_api_hints('x = "/api/v1/items"', "https://demo.example/p")
+        self.assertEqual(hints["urls"], ["https://demo.example/api/v1/items"])
+
+    def test_third_party_hint_is_dropped(self) -> None:
+        hints = analysis.extract_api_hints('src="//cdn.other.com/api/data"', "https://demo.example/p")
+        self.assertEqual(hints["urls"], [])
+
+    def test_query_string_is_stripped_from_hint(self) -> None:
+        hints = analysis.extract_api_hints('u="/api/items?api_key=SECRET"', "https://demo.example/p")
+        self.assertEqual(hints["urls"], ["https://demo.example/api/items"])
+        self.assertNotIn("SECRET", str(hints))
+
+    def test_subdomain_of_site_is_kept(self) -> None:
+        hints = analysis.extract_api_hints('u="https://api.demo.example/api/x"', "https://demo.example/p")
+        self.assertEqual(hints["urls"], ["https://api.demo.example/api/x"])

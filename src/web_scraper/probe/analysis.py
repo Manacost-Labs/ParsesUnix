@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import re
 from typing import Any, Mapping
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 MAX_LIST_ITEMS = 20
 
@@ -106,9 +106,36 @@ def extract_app_state(text: str) -> dict[str, bool]:
     }
 
 
-def extract_api_hints(text: str) -> dict[str, Any]:
-    urls = sorted(set(_API_HINT_RE.findall(text)))[:MAX_LIST_ITEMS]
-    return {"urls": urls, "graphql": any("graphql" in url.lower() for url in urls)}
+def _registrable_domain(host: str) -> str:
+    return ".".join(host.lower().rsplit(".", 2)[-2:])
+
+
+def extract_api_hints(text: str, base_url: str) -> dict[str, Any]:
+    """Absolute, same-site, query-stripped API/GraphQL endpoint hints.
+
+    Raw matches are joined against the page URL, so relative hints become
+    absolute. Third-party hosts and non-http schemes are dropped (a hint is
+    only useful as a route if it belongs to the site), and query strings are
+    removed so a secret like ``?api_key=...`` never survives into a profile.
+    """
+
+    base_host = urlsplit(base_url).hostname or ""
+    base_domain = _registrable_domain(base_host) if base_host else ""
+    urls: list[str] = []
+    seen: set[str] = set()
+    for raw in _API_HINT_RE.findall(text):
+        absolute = urljoin(base_url, raw)
+        parts = urlsplit(absolute)
+        if parts.scheme not in {"http", "https"} or not parts.hostname:
+            continue
+        if base_domain and _registrable_domain(parts.hostname) != base_domain:
+            continue  # third-party host: not a route for this site
+        clean = urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+        if clean not in seen:
+            seen.add(clean)
+            urls.append(clean)
+    urls.sort()
+    return {"urls": urls[:MAX_LIST_ITEMS], "graphql": any("graphql" in u.lower() for u in urls)}
 
 
 def visible_text(text: str) -> str:
@@ -131,7 +158,7 @@ def discover(body: bytes, final_url: str, content_type: str) -> dict[str, Any]:
         "opengraph": extract_opengraph(text),
         "app_state": extract_app_state(text),
         "alternates": extract_alternates(text, final_url),
-        "api_hints": extract_api_hints(text),
+        "api_hints": extract_api_hints(text, final_url),
     }
 
 
