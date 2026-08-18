@@ -14,7 +14,7 @@ unlocked only when a classifier has proven the free levels do not work.
 | Path | What it is |
 |---|---|
 | `src/web_scraper/` | The importable core: all logic lives here. |
-| `.agents/skills/` | Agent Skills: `web-scraper` (collect), `scraper-regression` (the site changed), `scraper-debugger` (the run is underperforming). |
+| `.agents/skills/` | Agent Skills — see below. |
 | `.claude/skills/` | Symlinks to the canonical skills (Claude Code picks them up here). |
 | `tests/` | `unittest` suite (standard library only) and saved-response fixtures. |
 | `docs/` | Implementation plan and research notes. |
@@ -22,6 +22,30 @@ unlocked only when a classifier has proven the free levels do not work.
 
 The scripts under `.agents/skills/web-scraper/scripts/` are **thin CLI wrappers**;
 they re-export from `web_scraper` and contain no logic of their own.
+
+## Skills
+
+Each skill is canonical in `.agents/skills/<name>` and symlinked from
+`.claude/skills/`. The split rule: **deterministic logic lives in the package
+behind a `ws-*` command; a skill only says when and how to apply it.**
+
+*Domain skills (this project's own):*
+
+| Skill | Answers | Tooling |
+|---|---|---|
+| `web-scraper` | how do I collect this site? | `ws-probe`, `ws-profile`, `ws-run` |
+| `scraper-regression` | what changed on the site? | `ws-regress` |
+| `scraper-debugger` | why is this run underperforming? | `ws-diagnose` |
+
+*Engineering-practice skills, vendored from MIT-licensed upstreams* (see
+[THIRD_PARTY.md](.agents/skills/THIRD_PARTY.md) for attribution and the
+project-specific conventions that override them): `karpathy-coder`,
+`test-driven-development`, `systematic-debugging`,
+`verification-before-completion`, `pr-review-expert`, `python-lint`,
+`python-typing`, `python-ci`.
+
+`tests/test_skills.py` validates every skill's frontmatter, symlink, relative
+links, and attribution, so a broken skill fails CI instead of failing silently.
 
 ## Core concepts
 

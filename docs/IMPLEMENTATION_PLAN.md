@@ -13,6 +13,8 @@
   - `scraper-regression` — что изменилось на сайте (`ws-regress`).
   - `scraper-debugger` — почему прогон недобирает и что с этим делать (`ws-diagnose`).
   - Обновлено 2026-08-19: раньше решение фиксировало один-единственный skill; расширено до семейства с непересекающимися описаниями, чтобы триггеры не конкурировали.
+- Инженерные практики подключены как vendored-скиллы из MIT-репозиториев (`karpathy-coder`, `test-driven-development`, `systematic-debugging`, `verification-before-completion`, `pr-review-expert`, `python-lint`, `python-typing`, `python-ci`). Хранятся байт-в-байт как upstream, атрибуция и список правок — в `.agents/skills/THIRD_PARTY.md`. Там же зафиксировано, что конвенции проекта важнее их рекомендаций по инструментам: тесты остаются на stdlib `unittest`, `ruff`/`mypy` живут только в `dev`-extra и CI, рантайм пакета — без сторонних зависимостей.
+- Ограничение frontmatter (`name`+`description`) действует для собственных скиллов; vendored сохраняют свой upstream-frontmatter. Обе инварианты проверяются `tests/test_skills.py` — это закрывает пункт «проверка формата скилла» из Этапа 0.
 - Frontmatter ограничен `name` и `description`, что совместимо с общим Agent Skills форматом.
 - Python + Scrapling — основной путь. Scrapy сохраняется для существующих проектов; Rust (`wreq`) — поздняя оптимизация стабильного L1.
 - `triage` — единственный источник решений о retry/escalation.
