@@ -7,10 +7,26 @@ they pass. On failure the clean dataset is untouched and the last-known-good
 (LKG) snapshot remains the served version.
 """
 
+from web_scraper.publish.availability import (
+    AvailabilitySLO,
+    DataStatus,
+    RecordAvailability,
+    build_availability,
+    summarize_availability,
+)
 from web_scraper.publish.store import (
     DatasetStore,
     PromoteDecision,
     validate_staging,
 )
 
-__all__ = ["DatasetStore", "PromoteDecision", "validate_staging"]
+__all__ = [
+    "AvailabilitySLO",
+    "DataStatus",
+    "DatasetStore",
+    "PromoteDecision",
+    "RecordAvailability",
+    "build_availability",
+    "summarize_availability",
+    "validate_staging",
+]

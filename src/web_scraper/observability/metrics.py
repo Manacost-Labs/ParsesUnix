@@ -40,6 +40,8 @@ class RunMetrics:
     per_domain: Counter[str] = field(default_factory=Counter)
     #: Per-route health, straight from the route memory (see web_scraper.routing).
     route_stats: list[dict[str, Any]] = field(default_factory=list)
+    #: Fresh vs merely-available share of the published dataset (see publish.availability).
+    availability: dict[str, Any] = field(default_factory=dict)
 
     def observe(
         self,
@@ -90,6 +92,7 @@ class RunMetrics:
             "unattributed_costs": self.unattributed_costs,
             "per_domain": dict(self.per_domain),
             "route_stats": self.route_stats,
+            "availability": self.availability,
         }
 
 

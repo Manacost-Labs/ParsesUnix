@@ -258,6 +258,26 @@ class DatasetStore:
             conn.commit()
         return decision
 
+    def clean_rows_with_meta(self) -> list[dict[str, Any]]:
+        """Clean rows plus the metadata a consumer needs to judge their age.
+
+        ``clean_rows`` is convenient but deliberately anonymous about freshness;
+        anything user-facing should go through availability instead.
+        """
+
+        with closing(self._connect()) as conn:
+            rows = conn.execute("SELECT * FROM clean ORDER BY natural_key").fetchall()
+        return [
+            {
+                "natural_key": r["natural_key"],
+                "url": r["url"],
+                "updated_at": r["updated_at"],
+                "content_hash": r["content_hash"],
+                "data": json.loads(r["data"]),
+            }
+            for r in rows
+        ]
+
     def clean_rows(self) -> list[dict[str, Any]]:
         with closing(self._connect()) as conn:
             rows = conn.execute("SELECT * FROM clean ORDER BY natural_key").fetchall()

@@ -28,7 +28,7 @@ from web_scraper.observability.accounting import build_accounting
 from web_scraper.observability.metrics import build_report
 from web_scraper.profiles import load_profile
 from web_scraper.profiles.model import SiteProfile, UrlClass
-from web_scraper.publish import DatasetStore
+from web_scraper.publish import DatasetStore, build_availability, summarize_availability
 from web_scraper.queue import QueueStore, normalize_url
 from web_scraper.queue.store import QueuedUrl
 from web_scraper.routing import RouteStatsStore
@@ -71,6 +71,7 @@ class Runner:
         self.alerter = alerter or LoggingAlerter()
         self.metrics = RunMetrics()
         self._clock = clock
+        self._wall_clock = wall_clock
         self._gateway = gateway or FetchGateway(
             self.profile,
             snapshots=self.snapshots,
@@ -135,6 +136,7 @@ class Runner:
                 )
             )
         self.metrics.route_stats = [stats.to_dict() for stats in self.route_stats.all_stats()]
+        self.metrics.availability = self._availability_slo()
         report = build_report(
             self._results,
             metrics=self.metrics,
@@ -325,6 +327,29 @@ class Runner:
         )
 
     # -- finalize ----------------------------------------------------------
+
+    def _availability_slo(self) -> dict[str, Any]:
+        """How much of the published dataset a consumer may treat as current."""
+
+        max_age_hours = min(
+            (
+                float(cls.freshness.get("max_age_hours", 24))
+                for cls in self.profile.url_classes.values()
+            ),
+            default=24.0,
+        )
+        verdicts = {
+            row.natural_key: row.verdict
+            for row in self.queue.all_rows()
+            if row.natural_key and row.verdict
+        }
+        records = build_availability(
+            self.dataset.clean_rows_with_meta(),
+            now=self._wall_clock(),
+            max_age_seconds=max_age_hours * 3600.0,
+            verdicts_by_key=verdicts,
+        )
+        return summarize_availability(records).to_dict()
 
     def _promote(self) -> dict[str, Any] | None:
         required = sorted(
