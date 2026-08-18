@@ -150,7 +150,19 @@ class GatewayNeverEscalatesTests(unittest.TestCase):
         self.assertEqual(len(outcome.result.attempts), 1)
         self.assertEqual(l2.calls, [])
 
-    def test_access_denied_is_terminal(self) -> None:
+    def test_access_denied_message_is_terminal(self) -> None:
+        profile = make_profile(
+            {"type": "direct_http", "level": "L1"},
+            [{"type": "dynamic", "level": "L2"}],
+        )
+        l1 = FakeTransport({PAGE_URL: [response(PAGE_URL, 403, b"Login required to continue", {})]})
+        l2 = FakeTransport({PAGE_URL: [fixture_response("success")]})
+        outcome = gateway_for(profile, {"L1": l1, "L2": l2}).fetch_url(PAGE_URL)
+        self.assertEqual(outcome.result.verdict, Verdict.ACCESS_DENIED)
+        self.assertEqual(l2.calls, [])
+        self.assertFalse(outcome.paid_escalation_candidate)
+
+    def test_bare_403_escalates_to_browser(self) -> None:
         profile = make_profile(
             {"type": "direct_http", "level": "L1"},
             [{"type": "dynamic", "level": "L2"}],
@@ -158,9 +170,11 @@ class GatewayNeverEscalatesTests(unittest.TestCase):
         l1 = FakeTransport({PAGE_URL: [response(PAGE_URL, 403, b"Forbidden", {})]})
         l2 = FakeTransport({PAGE_URL: [fixture_response("success")]})
         outcome = gateway_for(profile, {"L1": l1, "L2": l2}).fetch_url(PAGE_URL)
-        self.assertEqual(outcome.result.verdict, Verdict.ACCESS_DENIED)
-        self.assertEqual(l2.calls, [])
-        self.assertFalse(outcome.paid_escalation_candidate)
+        self.assertEqual(outcome.result.verdict, Verdict.OK)
+        self.assertEqual(
+            [(a.level.value, a.verdict.value) for a in outcome.result.attempts],
+            [("L1", "BLOCKED"), ("L2", "OK")],
+        )
 
     def test_rate_limit_retries_with_retry_after_and_never_escalates(self) -> None:
         profile = make_profile(

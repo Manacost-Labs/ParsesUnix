@@ -9,7 +9,11 @@ url_classes:
     validation:
       min_body_bytes: 500
       canary: "<article"
-      stop_signatures: ["temporarily unavailable in your region"]
+      # Extra anti-bot / challenge markers merged into the block-signature scan.
+      # Use these ONLY for strings that mean "you are being blocked", not for
+      # geo/access messages (those are ACCESS_DENIED and must never authorize
+      # paid escalation).
+      stop_signatures: ["px-captcha", "please verify you are a human"]
       required_fields: [title, published_at]
 
     routes:

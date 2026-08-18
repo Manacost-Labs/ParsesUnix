@@ -16,7 +16,7 @@
 
 ## Adaptive Cost Router — позже
 
-Ключ статистики: `(domain, url_class, route, level)`. В рабочую выборку успеха включать только `OK`, `BLOCKED`, `SOFT_BLOCK`. `DEAD_URL`, `ORIGIN_DOWN`, `RATE_LIMITED`, `PROVIDER_ERROR`, `AUTH_REQUIRED`, `ACCESS_DENIED` и `PARSE_FAIL` нейтральны для оценки способности уровня пройти защиту.
+Ключ статистики: `(domain, url_class, route, level)`. В рабочую выборку успеха включать только `OK`, `BLOCKED`, `SOFT_BLOCK`. `DEAD_URL`, `ORIGIN_DOWN`, `RATE_LIMITED`, `PROVIDER_ERROR`, `AUTH_REQUIRED`, `ACCESS_DENIED`, `THIN_CONTENT` и `PARSE_FAIL` нейтральны для оценки способности уровня пройти защиту.
 
 Хранить attempts, validated successes, EWMA, нижнюю границу Уилсона, фактическую стоимость, p50/p95 и даты изменений.
 

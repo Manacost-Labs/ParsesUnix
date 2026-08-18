@@ -53,8 +53,14 @@ class TriageTests(unittest.TestCase):
         )
         self.assertEqual(result.verdict, Verdict.PARSE_FAIL)
 
-    def test_access_denied_without_waf_signature_does_not_escalate(self) -> None:
+    def test_bare_403_is_blocked_so_a_browser_retry_is_allowed(self) -> None:
+        # A terse 403 with no access-control message is silent bot mitigation;
+        # it must not terminally kill the URL.
         result = classify_response(status=403, body="Forbidden")
+        self.assertEqual(result.verdict, Verdict.BLOCKED)
+
+    def test_403_with_access_message_is_terminal_access_denied(self) -> None:
+        result = classify_response(status=403, body="Login required to continue")
         self.assertEqual(result.verdict, Verdict.ACCESS_DENIED)
         self.assertFalse(result.paid_escalation_allowed)
 
@@ -62,6 +68,22 @@ class TriageTests(unittest.TestCase):
         result = classify_response(status=200, body="Access denied" + " " * 300)
         self.assertEqual(result.verdict, Verdict.ACCESS_DENIED)
         self.assertFalse(result.paid_escalation_allowed)
+
+    def test_small_2xx_is_thin_content_not_paid_escalation(self) -> None:
+        result = classify_response(
+            status=200, body='{"ok":true}', headers={"Content-Type": "application/json"},
+            rules=ContentRules(min_body_bytes=500),
+        )
+        self.assertEqual(result.verdict, Verdict.THIN_CONTENT)
+        self.assertFalse(result.paid_escalation_allowed)
+
+    def test_provider_404_is_provider_error_not_dead_url(self) -> None:
+        result = classify_response(status=404, source="provider")
+        self.assertEqual(result.verdict, Verdict.PROVIDER_ERROR)
+
+    def test_407_is_provider_error_not_auth_required(self) -> None:
+        result = classify_response(status=407)
+        self.assertEqual(result.verdict, Verdict.PROVIDER_ERROR)
 
 
 if __name__ == "__main__":

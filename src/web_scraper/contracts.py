@@ -21,11 +21,17 @@ class Verdict(str, Enum):
     ACCESS_DENIED = "ACCESS_DENIED"
     BLOCKED = "BLOCKED"
     SOFT_BLOCK = "SOFT_BLOCK"
+    THIN_CONTENT = "THIN_CONTENT"
     PROVIDER_ERROR = "PROVIDER_ERROR"
     PARSE_FAIL = "PARSE_FAIL"
 
 
-#: The only verdicts that may ever justify a paid (L3/L4) escalation.
+#: Verdicts that may unlock the next *free* level (L1/L2 browser retry).
+FREE_ESCALATION_VERDICTS = frozenset({Verdict.BLOCKED, Verdict.SOFT_BLOCK})
+
+#: The only verdicts that may ever justify a *paid* (L3/L4) escalation.
+#: A strict subset of the free set: reaching a browser is cheap, spending money
+#: is not, so THIN_CONTENT and a bare-403 BLOCKED-by-status never pay on their own.
 PAID_ESCALATION_VERDICTS = frozenset({Verdict.BLOCKED, Verdict.SOFT_BLOCK})
 
 
@@ -33,7 +39,7 @@ class Level(str, Enum):
     """Fetching levels ordered from cheapest to most expensive."""
 
     L0 = "L0"  # machine-readable routes: JSON API, RSS/Atom, sitemap
-    L1 = "L1"  # direct HTTP (Scrapling session)
+    L1 = "L1"  # direct HTTP (stdlib or Scrapling session)
     L2 = "L2"  # local browser: dynamic or stealthy fetcher
     L3 = "L3"  # paid provider: scrape.do / Firecrawl
     L4 = "L4"  # paid unblocker: Bright Data

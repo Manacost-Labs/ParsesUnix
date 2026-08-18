@@ -106,7 +106,10 @@ def classify_response(
         verdict = Verdict.PROVIDER_ERROR if source == "provider" else Verdict.ORIGIN_DOWN
         return TriageResult(verdict, "no HTTP status", None, len(payload))
 
-    if source == "provider" and (status in {401, 429, 502, 510} or status >= 500):
+    # A provider (L3/L4) failure must never be read with target semantics: a
+    # provider-side 404/403/400 means "the provider could not serve the job",
+    # not "the target URL is dead / access-controlled".
+    if source == "provider" and (status in {400, 401, 403, 404, 407, 429, 502, 510} or status >= 500):
         return TriageResult(
             Verdict.PROVIDER_ERROR,
             f"provider returned HTTP {status}",
@@ -115,10 +118,20 @@ def classify_response(
             signature,
         )
 
+    # 407 is a proxy problem (our proxy, not the target): treat it as a provider
+    # error regardless of source, never as target authorization.
+    if status == 407:
+        return TriageResult(
+            Verdict.PROVIDER_ERROR,
+            "proxy authentication required (HTTP 407)",
+            status,
+            len(payload),
+        )
+
     if status in {404, 410}:
         return TriageResult(Verdict.DEAD_URL, f"target returned HTTP {status}", status, len(payload))
 
-    if status in {401, 402, 407}:
+    if status in {401, 402}:
         return TriageResult(
             Verdict.AUTH_REQUIRED,
             f"target requires authorized access (HTTP {status})",
@@ -148,9 +161,14 @@ def classify_response(
                 len(payload),
                 access_signature,
             )
+        # A bare 403 with no access-control message is almost always silent bot
+        # mitigation (Cloudflare/Akamai/F5 return terse 403s). Classify it as
+        # BLOCKED so a free browser retry (L2) is allowed, instead of a terminal
+        # ACCESS_DENIED that kills the URL. A genuine "log in" gives 401 or an
+        # access-control message, both handled above.
         return TriageResult(
-            Verdict.ACCESS_DENIED,
-            "HTTP 403 without a recognized anti-bot signature",
+            Verdict.BLOCKED,
+            "HTTP 403 without an access-control message (treated as silent bot mitigation)",
             status,
             len(payload),
         )
@@ -184,8 +202,11 @@ def classify_response(
                 access_signature,
             )
         if len(payload) < selected_rules.min_body_bytes:
+            # A small 2xx body (204, {"ok":true}, a thin listing) is a
+            # data-quality signal, not proof of a block. THIN_CONTENT never
+            # authorizes paid escalation the way SOFT_BLOCK would.
             return TriageResult(
-                Verdict.SOFT_BLOCK,
+                Verdict.THIN_CONTENT,
                 f"body is smaller than {selected_rules.min_body_bytes} bytes",
                 status,
                 len(payload),

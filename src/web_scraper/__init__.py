@@ -5,6 +5,7 @@ wrappers over this package; all logic lives here.
 """
 
 from web_scraper.contracts import (
+    FREE_ESCALATION_VERDICTS,
     PAID_ESCALATION_VERDICTS,
     Attempt,
     ContentRules,
@@ -19,6 +20,7 @@ from web_scraper.contracts import (
 __version__ = "0.1.0"
 
 __all__ = [
+    "FREE_ESCALATION_VERDICTS",
     "PAID_ESCALATION_VERDICTS",
     "Attempt",
     "ContentRules",
