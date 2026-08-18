@@ -6,6 +6,7 @@ import argparse
 import json
 import sqlite3
 import uuid
+from contextlib import closing
 from dataclasses import asdict, dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -64,13 +65,17 @@ class BudgetLedger:
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
+        # ``sqlite3.connect`` as a context manager only commits/rolls back the
+        # transaction — it does NOT close the connection. Every caller wraps the
+        # connection in ``closing`` so a long run does not leak file descriptors
+        # and pin WAL read marks.
         connection = sqlite3.connect(self.path)
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA busy_timeout=5000")
         return connection
 
     def _initialize(self) -> None:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS usage_events (
@@ -100,7 +105,7 @@ class BudgetLedger:
         if provider:
             query += " AND provider = ?"
             params.append(provider)
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             rows = list(connection.execute(query, params))
         credits, money = self._sum_rows(rows)
         return Usage(selected_day, credits, money, len(rows))
@@ -121,10 +126,10 @@ class BudgetLedger:
         credit_value = _decimal(credits)
         money_value = _decimal(money)
 
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             duplicate = connection.execute(
-                "SELECT 1 FROM usage_events WHERE request_id = ?", (selected_id,)
+                "SELECT credits, money FROM usage_events WHERE request_id = ?", (selected_id,)
             ).fetchone()
             rows = list(
                 connection.execute(
@@ -134,6 +139,14 @@ class BudgetLedger:
             current_credits, current_money = self._sum_rows(rows)
             if duplicate:
                 connection.rollback()
+                # A replayed request_id is idempotent, but a DIFFERENT amount for
+                # the same id is a caller bug (a real new charge needs a new id).
+                if _decimal(duplicate[0]) != credit_value or _decimal(duplicate[1]) != money_value:
+                    raise ValueError(
+                        f"request_id {selected_id!r} already recorded with a different amount "
+                        f"({duplicate[0]}/{duplicate[1]} vs {credit_value}/{money_value}); "
+                        "use a fresh request_id for a new charge"
+                    )
                 return Usage(selected_day, current_credits, current_money, len(rows))
 
             next_credits = current_credits + credit_value

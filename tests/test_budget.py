@@ -43,6 +43,25 @@ class BudgetTests(unittest.TestCase):
         self.assertEqual(cost, Decimal("25"))
 
 
+    def test_replaying_request_id_with_different_amount_is_rejected(self) -> None:
+        ledger = BudgetLedger(self.db, daily_credit_limit="100")
+        ledger.record(provider="scrape.do", credits="3", request_id="r0", day="2026-08-18")
+        with self.assertRaises(ValueError):
+            ledger.record(provider="scrape.do", credits="9", request_id="r0", day="2026-08-18")
+        self.assertEqual(ledger.usage(day="2026-08-18").credits, Decimal("3"))
+
+    def test_money_limit_is_enforced(self) -> None:
+        ledger = BudgetLedger(self.db, daily_credit_limit="1000", daily_money_limit="1.00")
+        ledger.record(provider="firecrawl", credits="1", money="0.80", request_id="m1", day="2026-08-18")
+        with self.assertRaises(BudgetExceeded):
+            ledger.record(provider="firecrawl", credits="1", money="0.50", request_id="m2", day="2026-08-18")
+
+    def test_many_records_do_not_leak_connections(self) -> None:
+        ledger = BudgetLedger(self.db, daily_credit_limit="10000")
+        for i in range(50):
+            ledger.record(provider="scrape.do", credits="1", request_id=f"id{i}", day="2026-08-18")
+        self.assertEqual(ledger.usage(day="2026-08-18").requests, 50)
+
 if __name__ == "__main__":
     unittest.main()
 
