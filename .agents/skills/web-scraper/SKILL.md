@@ -46,7 +46,7 @@ Build the cheapest reliable collection path that preserves data quality and repo
 
 ## Bundled resources
 
-All scripts are thin CLI wrappers over the repository's importable core package (`src/web_scraper/`): contracts, triage, probe, profiles, and budget logic live there and are unit-tested against saved fixtures in `tests/fixtures/`.
+All scripts are thin CLI wrappers over the repository's importable core package (`src/web_scraper/`): contracts, triage, probe, profiles, budget, and the free Fetch Gateway (`web_scraper.fetchers.FetchGateway`: L0-L2 routes, session warmup/TTL, pacing with jitter and `Retry-After`, redacted snapshots, mandatory triage after every attempt, and no paid escalation without a `BLOCKED`/`SOFT_BLOCK` verdict) live there and are unit-tested against saved fixtures in `tests/fixtures/`.
 
 - `scripts/probe.py`: safe static reconnaissance v2 with private-network blocking on every redirect hop; reports robots/sitemaps, feeds, JSON-LD/OpenGraph/app-state, canonical URL, API hints, SSR/CSR classification, and a recommended start level as a stable JSON contract (`--draft-profile` writes a validated Site Profile draft; `--browser` adds optional CSR recon via Playwright).
 - `scripts/triage.py`: canonical response classifier and content validation (single source of retry/escalation decisions).
