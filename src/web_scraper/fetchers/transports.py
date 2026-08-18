@@ -14,10 +14,10 @@ import socket
 import time
 from typing import Mapping
 from urllib.error import HTTPError, URLError
-from urllib.request import HTTPCookieProcessor, Request, build_opener
+from urllib.request import HTTPCookieProcessor, Request
 
 from web_scraper.fetchers.base import RawResponse, TransportUnavailable
-from web_scraper.probe.safety import Resolver, ValidatingRedirectHandler, validate_public_url
+from web_scraper.probe.safety import Resolver, build_safe_opener, validate_public_url
 
 DEFAULT_USER_AGENT = "WebScraperSkill/0.2 (+authorized collection)"
 DEFAULT_MAX_BODY_BYTES = 2_000_000
@@ -57,10 +57,12 @@ class UrllibTransport:
         self.timeout = timeout
         self.max_body_bytes = max_body_bytes
         self.user_agent = user_agent
-        handlers = [ValidatingRedirectHandler(allow_private=allow_private, resolver=resolver)]
-        if use_cookies:
-            handlers.append(HTTPCookieProcessor(http.cookiejar.CookieJar()))
-        self._opener = build_opener(*handlers)
+        cookie_processor = (
+            HTTPCookieProcessor(http.cookiejar.CookieJar()) if use_cookies else None
+        )
+        self._opener = build_safe_opener(
+            allow_private=allow_private, resolver=resolver, cookie_processor=cookie_processor
+        )
 
     def fetch(self, url: str, *, headers: Mapping[str, str] | None = None) -> RawResponse:
         validate_public_url(url, allow_private=self.allow_private, resolver=self.resolver)
@@ -76,6 +78,7 @@ class UrllibTransport:
         final_url = url
         raw_headers: dict[str, str] = {}
         body = b""
+        truncated = False
         transport_error: str | None = None
         try:
             with self._opener.open(request, timeout=self.timeout) as response:
@@ -83,15 +86,19 @@ class UrllibTransport:
                 final_url = response.geturl()
                 validate_public_url(final_url, allow_private=self.allow_private, resolver=self.resolver)
                 raw_headers = dict(response.headers.items())
-                body = response.read(self.max_body_bytes)
+                body = response.read(self.max_body_bytes + 1)
         except HTTPError as exc:
             status = exc.code
             final_url = exc.geturl()
             validate_public_url(final_url, allow_private=self.allow_private, resolver=self.resolver)
             raw_headers = dict(exc.headers.items()) if exc.headers else {}
-            body = exc.read(self.max_body_bytes)
+            body = exc.read(self.max_body_bytes + 1)
         except (URLError, TimeoutError, OSError) as exc:
             transport_error = str(exc)
+
+        if len(body) > self.max_body_bytes:
+            truncated = True
+            body = body[: self.max_body_bytes]
 
         return RawResponse(
             requested_url=url,
@@ -100,6 +107,7 @@ class UrllibTransport:
             headers=raw_headers,
             body=body,
             elapsed_ms=int((time.monotonic() - started) * 1000),
+            truncated=truncated,
             transport_error=transport_error,
         )
 

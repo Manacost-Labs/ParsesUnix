@@ -171,7 +171,23 @@ class ProbeReportTests(unittest.TestCase):
         self.assertEqual(report.fetch["sha256"], hashlib.sha256(saved.body).hexdigest())
         self.assertEqual(report.robots["sitemaps"], ["https://demo-news.example/sitemap.xml"])
         self.assertEqual(report.robots["crawl_delay"], 5)
+        self.assertTrue(report.robots["target_allowed"])  # /articles/ not disallowed
         self.assertEqual(report.verdict, "OK")
+
+    def test_robots_disallow_is_reported(self) -> None:
+        page = fixture_fetch_result("success")
+        disallow = FetchResult(
+            requested_url="https://demo-news.example/robots.txt",
+            final_url="https://demo-news.example/robots.txt",
+            status=200,
+            headers={"Content-Type": "text/plain"},
+            body=b"User-agent: *\nDisallow: /articles/\n",
+            truncated=False,
+            redirect_chain=(),
+        )
+        fetch = make_fetch({page.requested_url: page, disallow.requested_url: disallow})
+        report = probe(page.requested_url, fetch=fetch, resolver=PUBLIC_RESOLVER)
+        self.assertFalse(report.robots["target_allowed"])
 
     def test_recommendation_prefers_l0_for_discovered_feed(self) -> None:
         report = self.build_report()

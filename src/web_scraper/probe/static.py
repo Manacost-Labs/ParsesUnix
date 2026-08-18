@@ -14,11 +14,11 @@ from typing import Any, Callable
 from urllib import robotparser
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit
-from urllib.request import Request, build_opener
+from urllib.request import Request
 
 from web_scraper.contracts import ContentRules
 from web_scraper.probe import analysis
-from web_scraper.probe.safety import Resolver, UnsafeTarget, ValidatingRedirectHandler, validate_public_url
+from web_scraper.probe.safety import Resolver, UnsafeTarget, build_safe_opener, validate_public_url
 from web_scraper.triage import classify_response
 
 PROBE_REPORT_SCHEMA = "web-scraper/probe-report/v2"
@@ -55,15 +55,15 @@ def default_fetch(
     timeout: float = 20.0,
 ) -> FetchResult:
     chain: list[dict] = []
-    opener = build_opener(
-        ValidatingRedirectHandler(allow_private=allow_private, resolver=resolver, chain=chain)
-    )
+    opener = build_safe_opener(allow_private=allow_private, resolver=resolver, chain=chain)
+    # No Range header: a server honoring Range returns exactly the requested
+    # window, which would make every response look complete. Reading one byte
+    # past the cap detects truncation honestly while still bounding the download.
     request = Request(
         url,
         headers={
             "User-Agent": USER_AGENT,
             "Accept": ACCEPT,
-            "Range": f"bytes=0-{max_body_bytes - 1}",
         },
     )
 
@@ -101,8 +101,19 @@ def default_fetch(
     )
 
 
-def fetch_robots(origin: str, fetch: FetchFn) -> dict[str, Any]:
-    """Fetch and parse robots.txt: declared sitemaps, crawl delay, permission."""
+def fetch_robots(
+    origin: str,
+    fetch: FetchFn,
+    *,
+    target_url: str | None = None,
+    user_agent: str = USER_AGENT,
+) -> dict[str, Any]:
+    """Fetch and parse robots.txt: declared sitemaps, crawl delay, permission.
+
+    ``target_allowed`` reflects an actual ``can_fetch`` check for ``target_url``.
+    When robots.txt is absent or unreadable it defaults to True (permitted),
+    matching the robots convention that no rules means no restriction.
+    """
 
     robots_url = urljoin(origin, "/robots.txt")
     section: dict[str, Any] = {
@@ -112,6 +123,7 @@ def fetch_robots(origin: str, fetch: FetchFn) -> dict[str, Any]:
         "sitemaps": [],
         "crawl_delay": None,
         "target_allowed": True,
+        "checked_user_agent": user_agent,
     }
     try:
         outcome = fetch(robots_url)
@@ -119,7 +131,13 @@ def fetch_robots(origin: str, fetch: FetchFn) -> dict[str, Any]:
         section["error"] = str(exc)
         return section
     section["status"] = outcome.status
-    if outcome.transport_error or outcome.status is None or not (200 <= outcome.status < 300):
+    if outcome.transport_error or outcome.status is None:
+        return section
+    if outcome.status in {401, 403}:
+        # An access-controlled robots.txt is treated as "disallow all" by the RFC.
+        section["target_allowed"] = False
+        return section
+    if not (200 <= outcome.status < 300):
         return section
 
     text = outcome.body[:ROBOTS_MAX_BYTES].decode("utf-8", errors="ignore")
@@ -127,7 +145,9 @@ def fetch_robots(origin: str, fetch: FetchFn) -> dict[str, Any]:
     parser.parse(text.splitlines())
     section["fetched"] = True
     section["sitemaps"] = list(parser.site_maps() or [])[:20]
-    section["crawl_delay"] = parser.crawl_delay("*")
+    section["crawl_delay"] = parser.crawl_delay(user_agent) or parser.crawl_delay("*")
+    if target_url is not None:
+        section["target_allowed"] = parser.can_fetch(user_agent, target_url)
     return section
 
 
@@ -190,10 +210,17 @@ def probe(
         rules=ContentRules(min_body_bytes=1),
     )
 
-    robots_section: dict[str, Any] = {"url": None, "fetched": False, "sitemaps": []}
+    robots_section: dict[str, Any] = {
+        "url": None,
+        "fetched": False,
+        "sitemaps": [],
+        "target_allowed": True,
+    }
     if include_robots and outcome.transport_error is None:
         parts = urlsplit(outcome.final_url)
-        robots_section = fetch_robots(f"{parts.scheme}://{parts.netloc}/", fetch_fn)
+        robots_section = fetch_robots(
+            f"{parts.scheme}://{parts.netloc}/", fetch_fn, target_url=outcome.final_url
+        )
 
     discovery = analysis.discover(outcome.body, outcome.final_url, content_type)
     rendering = analysis.classify_rendering(outcome.body, content_type, discovery["app_state"])

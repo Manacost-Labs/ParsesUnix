@@ -16,6 +16,7 @@ class RawResponse:
     headers: dict[str, str]
     body: bytes
     elapsed_ms: int | None = None
+    truncated: bool = False
     transport_error: str | None = None
 
 
