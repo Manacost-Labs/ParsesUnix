@@ -109,6 +109,21 @@ def validate_public_url(
         raise UnsafeTarget("target resolves to a non-public address: " + ", ".join(blocked))
 
 
+def is_public_url(
+    url: str,
+    *,
+    allow_private: bool = False,
+    resolver: Resolver = socket.getaddrinfo,
+) -> bool:
+    """Boolean form of ``validate_public_url`` for browser request guards."""
+
+    try:
+        validate_public_url(url, allow_private=allow_private, resolver=resolver)
+    except UnsafeTarget:
+        return False
+    return True
+
+
 def pick_safe_address(
     hostname: str,
     port: int,

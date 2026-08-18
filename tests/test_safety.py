@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from web_scraper.probe.safety import (  # noqa: E402
     SENSITIVE_REQUEST_HEADERS,
+    is_public_url,
     UnsafeTarget,
     ValidatingRedirectHandler,
     pick_safe_address,
@@ -101,3 +102,17 @@ class RedirectHeaderStrippingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IsPublicUrlTests(unittest.TestCase):
+    def test_public_true_private_false(self) -> None:
+        self.assertTrue(is_public_url("https://1.1.1.1/"))
+        self.assertFalse(is_public_url("http://169.254.169.254/latest"))
+        self.assertFalse(is_public_url("http://100.64.1.5/"))
+
+    def test_resolver_is_honored(self) -> None:
+        self.assertFalse(is_public_url("http://intranet.example/", resolver=PRIVATE))
+        self.assertTrue(is_public_url("http://ok.example/", resolver=PUBLIC))
+
+    def test_allow_private_override(self) -> None:
+        self.assertTrue(is_public_url("http://intranet.example/", resolver=PRIVATE, allow_private=True))

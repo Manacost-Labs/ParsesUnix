@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping, Sequence
 from urllib.parse import urlsplit
 
-from web_scraper.probe.safety import Resolver, validate_public_url
+from web_scraper.probe.safety import Resolver, is_public_url, validate_public_url
 
 BROWSER_RECON_SCHEMA = "web-scraper/browser-recon/v1"
 
@@ -207,6 +207,8 @@ def _capture_with_playwright(
     max_captures: int,
     max_json_bytes: int,
     headless: bool,
+    allow_private: bool = False,
+    resolver: Resolver = socket.getaddrinfo,
 ) -> list[CapturedResponse]:
     try:
         from playwright.sync_api import sync_playwright
@@ -217,6 +219,12 @@ def _capture_with_playwright(
         ) from exc
 
     captured: list[CapturedResponse] = []
+
+    def guard_route(route) -> None:  # pragma: no cover - needs a live browser
+        if is_public_url(route.request.url, allow_private=allow_private, resolver=resolver):
+            route.continue_()
+        else:
+            route.abort()
 
     def on_response(response) -> None:  # pragma: no cover - needs a live browser
         if len(captured) >= max_captures:
@@ -247,9 +255,12 @@ def _capture_with_playwright(
             )
         )
 
-    with sync_playwright() as playwright:  # pragma: no cover - needs a live browser
+    playwright = browser = context = None  # pragma: no cover - needs a live browser
+    try:  # pragma: no cover - needs a live browser
+        playwright = sync_playwright().start()
         browser = playwright.chromium.launch(headless=headless)
         context = browser.new_context()  # fresh context: no cookies, no stored state
+        context.route("**/*", guard_route)  # SSRF guard on every request
         page = context.new_page()
         page.on("response", on_response)
         page.goto(url, timeout=timeout_s * 1000)
@@ -257,8 +268,14 @@ def _capture_with_playwright(
             page.wait_for_load_state("networkidle", timeout=timeout_s * 1000)
         except Exception:
             pass  # capture whatever arrived before the timeout
-        context.close()
-        browser.close()
+    finally:  # pragma: no cover - needs a live browser
+        for obj in (context, browser, playwright):
+            closer = getattr(obj, "close", None) or getattr(obj, "stop", None) if obj else None
+            if closer:
+                try:
+                    closer()
+                except Exception:
+                    pass
     return captured
 
 
@@ -304,6 +321,8 @@ def browser_recon(
         max_captures=max_captures,
         max_json_bytes=max_json_bytes,
         headless=headless,
+        allow_private=allow_private,
+        resolver=resolver,
     )
     candidates = extract_candidates(captured, target_fields)
     return BrowserReconReport(

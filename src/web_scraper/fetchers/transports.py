@@ -17,10 +17,26 @@ from urllib.error import HTTPError, URLError
 from urllib.request import HTTPCookieProcessor, Request
 
 from web_scraper.fetchers.base import RawResponse, TransportUnavailable
-from web_scraper.probe.safety import Resolver, build_safe_opener, validate_public_url
+from web_scraper.probe.safety import Resolver, build_safe_opener, is_public_url, validate_public_url
 
 DEFAULT_USER_AGENT = "WebScraperSkill/0.2 (+authorized collection)"
 DEFAULT_MAX_BODY_BYTES = 2_000_000
+
+
+def _close_quietly(*objects: object) -> None:
+    """Close/stop Playwright objects, swallowing errors so cleanup never masks
+    the original exception and never leaks a browser process."""
+
+    for obj in objects:
+        if obj is None:
+            continue
+        closer = getattr(obj, "close", None) or getattr(obj, "stop", None)
+        if closer is None:
+            continue
+        try:
+            closer()
+        except Exception:
+            pass
 
 
 def _module_available(name: str) -> bool:
@@ -128,6 +144,14 @@ class PlaywrightRenderTransport:
         self.timeout = timeout
         self.headless = headless
 
+    def _guard_route(self, route) -> None:  # pragma: no cover - needs a live browser
+        # Abort any request (navigation or subresource) to a non-public host, so
+        # a rendered page cannot drive the browser to internal/metadata targets.
+        if is_public_url(route.request.url, allow_private=self.allow_private, resolver=self.resolver):
+            route.continue_()
+        else:
+            route.abort()
+
     def fetch(self, url: str, *, headers: Mapping[str, str] | None = None) -> RawResponse:
         validate_public_url(url, allow_private=self.allow_private, resolver=self.resolver)
         try:
@@ -139,11 +163,16 @@ class PlaywrightRenderTransport:
             ) from exc
 
         started = time.monotonic()  # pragma: no cover - needs a live browser
-        with sync_playwright() as playwright:  # pragma: no cover - needs a live browser
+        playwright = browser = context = None  # pragma: no cover - needs a live browser
+        try:  # pragma: no cover - needs a live browser
+            playwright = sync_playwright().start()
             browser = playwright.chromium.launch(headless=self.headless)
             context = browser.new_context(extra_http_headers=dict(headers or {}))
+            context.route("**/*", self._guard_route)  # SSRF guard on every request
             page = context.new_page()
             response = page.goto(url, timeout=self.timeout * 1000)
+            # Re-validate the settled URL: goto may have followed redirects.
+            validate_public_url(page.url, allow_private=self.allow_private, resolver=self.resolver)
             try:
                 page.wait_for_load_state("networkidle", timeout=self.timeout * 1000)
             except Exception:
@@ -152,8 +181,8 @@ class PlaywrightRenderTransport:
             status = response.status if response else None
             raw_headers = dict(response.headers) if response else {}
             final_url = page.url
-            context.close()
-            browser.close()
+        finally:  # pragma: no cover - needs a live browser
+            _close_quietly(context, browser, playwright)
         return RawResponse(  # pragma: no cover - needs a live browser
             requested_url=url,
             final_url=final_url,
