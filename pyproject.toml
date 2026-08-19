@@ -60,7 +60,9 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 # Tests deliberately import after sys.path setup and use loopback fixtures.
-"tests/*" = ["E402", "S104", "S310", "RUF012"]
+# S105-S107: test tokens are literal placeholders like "TESTTOKEN", and
+# `token_env` is a variable name rather than a credential.
+"tests/*" = ["E402", "S104", "S105", "S106", "S107", "S310", "RUF012"]
 "tools/*" = ["S310"]
 # S310: every URL reaching urlopen here has already passed validate_public_url,
 # which rejects any scheme other than http/https and any non-public address.
