@@ -62,7 +62,8 @@ ignore = [
 # Tests deliberately import after sys.path setup and use loopback fixtures.
 # S105-S107: test tokens are literal placeholders like "TESTTOKEN", and
 # `token_env` is a variable name rather than a credential.
-"tests/*" = ["E402", "S104", "S105", "S106", "S107", "S310", "RUF012"]
+# S311: seeded Random() in tests is for reproducibility, not secrecy.
+"tests/*" = ["E402", "S104", "S105", "S106", "S107", "S310", "S311", "RUF012"]
 "tools/*" = ["S310"]
 # S310: every URL reaching urlopen here has already passed validate_public_url,
 # which rejects any scheme other than http/https and any non-public address.
