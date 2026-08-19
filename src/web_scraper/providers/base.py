@@ -153,6 +153,27 @@ class ProviderResponse:
     request_id: str | None = None
     #: Anti-bot vendor the provider reported seeing, when it says.
     detected_defense: str | None = None
+    #: Did this body come from the provider's cache? ``None`` means the provider
+    #: did not say, which is NOT the same as "no".
+    from_cache: bool | None = None
+    #: Age of the returned content, when the provider states it. ``None`` means
+    #: unprovable — see :attr:`freshness_provable`.
+    content_age_seconds: float | None = None
+
+    @property
+    def freshness_provable(self) -> bool:
+        """Can we defend calling this content fresh?
+
+        Only when the provider either fetched it live or told us how old it is.
+        A provider that may serve from cache without saying so leaves us unable
+        to prove anything, and unprovable freshness must never be published as
+        FRESH — a stale record that claims to be current is worse than one
+        honestly labelled stale.
+        """
+
+        if self.from_cache is False:
+            return True
+        return self.content_age_seconds is not None
 
     @property
     def provider_ok(self) -> bool:
@@ -171,6 +192,9 @@ class ProviderResponse:
             "cost": self.cost.to_dict(),
             "request_id": self.request_id,
             "detected_defense": self.detected_defense,
+            "from_cache": self.from_cache,
+            "content_age_seconds": self.content_age_seconds,
+            "freshness_provable": self.freshness_provable,
             "body_bytes": len(self.body),
         }
 

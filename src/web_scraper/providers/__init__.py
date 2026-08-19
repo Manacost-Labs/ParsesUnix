@@ -20,7 +20,9 @@ from web_scraper.providers.breaker import (
     BreakerStore,
     ProviderBreakers,
 )
+from web_scraper.providers.bright_data import BrightDataProvider
 from web_scraper.providers.escalation import PaidAttempt, PaidEscalator
+from web_scraper.providers.firecrawl import FirecrawlProvider
 from web_scraper.providers.router import PaidDecision, PaidProviderRouter
 from web_scraper.providers.scrape_do import ScrapeDoProvider
 
@@ -28,6 +30,8 @@ __all__ = [
     "Admission",
     "BreakerState",
     "BreakerStore",
+    "BrightDataProvider",
+    "FirecrawlProvider",
     "PaidAttempt",
     "PaidDecision",
     "PaidEscalator",
