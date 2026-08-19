@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from web_scraper.budget import BudgetLedger
 from web_scraper.contracts import Result, Verdict
 from web_scraper.extract import extract_fields, run_quorum
 from web_scraper.fetchers import CircuitBreaker, FetchGateway, RawResponse
@@ -69,6 +70,16 @@ class Runner:
         self.snapshots = SnapshotStore(config.snapshot_dir, now=wall_clock)
         self.route_stats = RouteStatsStore(config.route_stats_path, now=wall_clock)
         self.fingerprints = FingerprintStore(config.fingerprints_path, now=wall_clock)
+        # Only built when a limit is configured: no limit means no paid work.
+        self.budget = (
+            BudgetLedger(
+                config.budget_path,
+                daily_credit_limit=config.daily_credit_limit,
+                now=wall_clock,
+            )
+            if config.daily_credit_limit is not None
+            else None
+        )
         self.alerter = alerter or LoggingAlerter()
         self.metrics = RunMetrics()
         self._clock = clock
@@ -99,6 +110,10 @@ class Runner:
             url_class = self.profile.class_for_url(url)
             self.queue.add(url, url_class=url_class.name if url_class else None)
             seeded[url] = self.queue.get(url) is not None
+
+        # Money first: a reservation left open by a crashed process must be
+        # resolved before this run is allowed to commit any more spend.
+        self._recover_budget()
 
         # Resume: any IN_PROGRESS row is from a crashed run.
         self.queue.reset_stale_in_progress()
@@ -158,6 +173,24 @@ class Runner:
         )
         self._final_alerts(report.to_dict(), promote)
         return RunResult(report=report.to_dict(), promote=promote, processed=processed)
+
+    def _recover_budget(self) -> None:
+        """Resolve reservations from a crashed process, and alert if money is lost."""
+
+        if self.budget is None:
+            return
+        outcome = self.budget.recover_after_crash()
+        if outcome["marked_unknown"]:
+            self.alerter.send(
+                AlertEvent(
+                    kind="unknown_spend",
+                    message=(
+                        "reservations were submitted but never settled; paid work is "
+                        "blocked until they are reconciled"
+                    ),
+                    context=outcome,
+                )
+            )
 
     def _close_browser_pool(self) -> None:
         if self._browser_pool is None:

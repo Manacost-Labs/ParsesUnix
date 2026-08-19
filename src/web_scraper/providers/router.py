@@ -44,7 +44,10 @@ from web_scraper.routing.stats import RouteKey, RouteStatsStore, wilson_lower_bo
 #: everything and a frustrated operator lowers the bar to something arbitrary.
 #: 0.80 says "we are confident this works" and is reachable from ~15 clean
 #: observations. Raise it per url_class for data that genuinely warrants it.
-DEFAULT_RELIABILITY_TARGET = 0.80
+DEFAULT_MINIMUM_CONFIDENCE_BOUND = 0.80
+
+#: Deprecated alias kept so existing configs keep working.
+DEFAULT_RELIABILITY_TARGET = DEFAULT_MINIMUM_CONFIDENCE_BOUND
 
 #: Attempts needed before a strategy's own record outranks its declared order.
 DEFAULT_MIN_OBSERVATIONS = 5
@@ -132,14 +135,30 @@ class PaidProviderRouter:
     """Picks the cheapest strategy that clears the bar, and says why."""
 
     stats: RouteStatsStore | None = None
-    target: float = DEFAULT_RELIABILITY_TARGET
+    #: The bar a strategy must clear. Named for what it IS — a lower confidence
+    #: bound — because "reliability target" reads like a success rate and invites
+    #: operators to set 0.95 expecting "95% of calls work".
+    minimum_confidence_bound: float = DEFAULT_MINIMUM_CONFIDENCE_BOUND
+    #: Deprecated: use minimum_confidence_bound. Kept so configs do not break.
+    target: float | None = None  # deprecated alias, see __post_init__
     min_observations: int = DEFAULT_MIN_OBSERVATIONS
     shadow_probe_rate: float = DEFAULT_SHADOW_PROBE_RATE
     _rng: Any = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
-        if not 0.0 < self.target <= 1.0:
-            raise ValueError("reliability target must be in (0, 1]")
+        if self.target is not None:
+            import warnings
+
+            warnings.warn(
+                "PaidProviderRouter(target=...) is deprecated; use "
+                "minimum_confidence_bound=... — the value is a Wilson lower bound, "
+                "not a success rate (see docs/operations/cost-control.md)",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            self.minimum_confidence_bound = self.target
+        if not 0.0 < self.minimum_confidence_bound <= 1.0:
+            raise ValueError("minimum_confidence_bound must be in (0, 1]")
         if self.min_observations < 1:
             raise ValueError("min_observations must be >= 1")
         if self._rng is None:
@@ -211,7 +230,7 @@ class PaidProviderRouter:
                 continue
 
             reliability = wilson_lower_bound(successes, observations)
-            meets = reliability >= self.target
+            meets = reliability >= self.minimum_confidence_bound
             out.append(
                 StrategyAssessment(
                     strategy=strategy,
@@ -221,7 +240,7 @@ class PaidProviderRouter:
                     meets_target=meets,
                     reason=(
                         f"{successes}/{observations} validated"
-                        + ("" if meets else f", below target {self.target:.3f}")
+                        + ("" if meets else f", below target {self.minimum_confidence_bound:.3f}")
                     ),
                 )
             )
@@ -239,7 +258,7 @@ class PaidProviderRouter:
     ) -> PaidDecision:
         """The cheapest strategy clearing the target, with its reasoning."""
 
-        effective_target = target if target is not None else self.target
+        effective_target = target if target is not None else self.minimum_confidence_bound
         considered = self.assess(
             strategies, provider=provider, domain=domain, url_class=url_class, verdict=verdict
         )

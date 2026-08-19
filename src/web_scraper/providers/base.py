@@ -91,14 +91,29 @@ class ProviderStrategy:
     id: str
     #: Typical cost, used only for *planning*. Billing always uses the reported cost.
     nominal_cost: Decimal
+    #: What to HOLD before calling. A provider can bill more than the typical
+    #: figure, and a hold of 1 against a charge of 10 breaches the limit while
+    #: every individual check passed. Defaults to a margin over nominal.
+    reservation_cost: Decimal | None = None
     renders_javascript: bool = False
     premium_network: bool = False
     description: str = ""
+
+    @property
+    def worst_case_cost(self) -> Decimal:
+        """The amount to reserve. Never below the nominal cost."""
+
+        if self.reservation_cost is not None:
+            return max(self.reservation_cost, self.nominal_cost)
+        # A conservative default: providers publish typical prices, and domain
+        # profiles or plan tiers can push a single call above them.
+        return (self.nominal_cost * Decimal("2")).quantize(Decimal("1"))
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "nominal_cost": str(self.nominal_cost),
+            "reservation_cost": str(self.worst_case_cost),
             "renders_javascript": self.renders_javascript,
             "premium_network": self.premium_network,
             "description": self.description,

@@ -59,23 +59,27 @@ HEADER_DETECTED_WAF = "scrape.do-detected-waf"
 NORMAL = ProviderStrategy(
     id="normal",
     nominal_cost=Decimal("1"),
+    reservation_cost=Decimal("3"),
     description="datacenter proxy, no rendering — the default and the one to beat",
 )
 RENDER = ProviderStrategy(
     id="render",
     nominal_cost=Decimal("5"),
+    reservation_cost=Decimal("10"),
     renders_javascript=True,
     description="headless rendering; for CSR_REQUIRED, never for a dead or failing origin",
 )
 SUPER = ProviderStrategy(
     id="super",
     nominal_cost=Decimal("10"),
+    reservation_cost=Decimal("25"),
     premium_network=True,
     description="residential/mobile network; only against proven blocking",
 )
 SUPER_RENDER = ProviderStrategy(
     id="super_render",
     nominal_cost=Decimal("15"),
+    reservation_cost=Decimal("30"),
     renders_javascript=True,
     premium_network=True,
     description="both at once; the last resort, never a default",

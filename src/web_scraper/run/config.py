@@ -30,6 +30,8 @@ class RunConfig:
     browser_pool: bool = True
     #: Concurrent domain contexts; each costs memory even when idle.
     max_browser_contexts: int = 4
+    #: Daily credit ceiling for paid providers. None disables paid work entirely.
+    daily_credit_limit: str | None = None
 
     @property
     def queue_path(self) -> Path:
@@ -46,6 +48,10 @@ class RunConfig:
     @property
     def route_stats_path(self) -> Path:
         return self.state_dir / "route_stats.sqlite3"
+
+    @property
+    def budget_path(self) -> Path:
+        return self.state_dir / "budget.sqlite3"
 
     @property
     def fingerprints_path(self) -> Path:
@@ -81,4 +87,9 @@ class RunConfig:
             adaptive_routing=bool(data.get("adaptive_routing", True)),
             browser_pool=bool(data.get("browser_pool", True)),
             max_browser_contexts=int(data.get("max_browser_contexts", 4)),
+            daily_credit_limit=(
+                str(data["daily_credit_limit"])
+                if data.get("daily_credit_limit") is not None
+                else None
+            ),
         )
