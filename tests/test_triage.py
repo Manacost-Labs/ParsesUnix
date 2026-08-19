@@ -105,3 +105,75 @@ class TriageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CsrShellTests(unittest.TestCase):
+    """A client-rendered shell needs a browser, not an extractor fix."""
+
+    RULES = ContentRules(min_body_bytes=100, canary="<article")
+    HTML = {"Content-Type": "text/html"}
+
+    SHELL = (
+        b"<!DOCTYPE html><html><head><title>App</title>"
+        b'<script src="/static/main.js"></script><script src="/static/vendor.js"></script>'
+        b'</head><body><div id="root"></div>'
+        b"<noscript>You need to enable JavaScript to run this app.</noscript></body></html>"
+    )
+
+    def classify(self, body: bytes, rules: ContentRules | None = None):
+        return classify_response(
+            status=200, body=body, headers=self.HTML, rules=rules or self.RULES
+        )
+
+    def test_an_empty_app_root_is_csr_not_a_parse_failure(self) -> None:
+        result = self.classify(self.SHELL)
+        self.assertEqual(result.verdict, Verdict.CSR_REQUIRED)
+
+    def test_csr_unlocks_the_browser_but_never_authorizes_payment(self) -> None:
+        from web_scraper.contracts import FREE_ESCALATION_VERDICTS
+
+        result = self.classify(self.SHELL)
+        self.assertIn(result.verdict, FREE_ESCALATION_VERDICTS)
+        self.assertFalse(result.paid_escalation_allowed)
+
+    def test_a_redesigned_server_rendered_page_is_still_a_parse_failure(self) -> None:
+        # Real content, different markup: the profile is wrong, not the renderer.
+        redesigned = (
+            b'<html><body><div class="story"><h1>Title</h1><p>'
+            + b"word " * 200
+            + b"</p></div></body></html>"
+        )
+        self.assertEqual(self.classify(redesigned).verdict, Verdict.PARSE_FAIL)
+
+    def test_a_mount_point_carrying_real_text_is_not_a_shell(self) -> None:
+        # Plenty of server-rendered pages wrap content in <div id="app">.
+        served = (
+            b'<html><body><div id="app"><h1>Title</h1><p>'
+            + b"word " * 200
+            + b"</p></div></body></html>"
+        )
+        self.assertEqual(self.classify(served).verdict, Verdict.PARSE_FAIL)
+
+    def test_a_script_only_document_with_hydration_markers_is_csr(self) -> None:
+        hydrated = (
+            b'<html><head><script src="/a.js"></script><script src="/b.js"></script></head>'
+            b"<body><script>window.__NEXT_DATA__={}</script></body></html>"
+        )
+        self.assertEqual(self.classify(hydrated).verdict, Verdict.CSR_REQUIRED)
+
+    def test_a_challenge_page_is_still_a_block_not_csr(self) -> None:
+        # Block detection runs first: a challenge that happens to be script-heavy
+        # must not be mistaken for an unrendered application.
+        challenge = (
+            b'<html><title>Just a moment...</title><body><div id="root"></div></body></html>'
+        )
+        self.assertEqual(self.classify(challenge).verdict, Verdict.SOFT_BLOCK)
+
+    def test_json_responses_are_never_classified_as_shells(self) -> None:
+        result = classify_response(
+            status=200,
+            body=b'{"items": []}',
+            headers={"Content-Type": "application/json"},
+            rules=ContentRules(min_body_bytes=2, canary="items"),
+        )
+        self.assertEqual(result.verdict, Verdict.OK)

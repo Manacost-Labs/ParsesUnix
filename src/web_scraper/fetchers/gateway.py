@@ -4,7 +4,7 @@ Escalation policy (the load-bearing invariant of this module):
 
 - attempts start at the profile's primary route; routes at the same or a
   cheaper level are always allowed, in declared order;
-- only ``BLOCKED`` and ``SOFT_BLOCK`` unlock a higher level (up to L2, the
+- ``BLOCKED``, ``SOFT_BLOCK`` and ``CSR_REQUIRED`` unlock a higher level (up to L2, the
   highest free level); cheapest-first ordering still tries any cheaper route
   first — paid levels belong to provider adapters (stage 3);
 - ``DEAD_URL``, ``AUTH_REQUIRED``, and ``ACCESS_DENIED`` are terminal;

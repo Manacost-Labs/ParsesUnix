@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,56 @@ ACCESS_DENIED_SIGNATURES = (
     "login required",
     "sign in to continue",
 )
+
+
+#: An empty application root is the clearest CSR marker, but never the only one.
+_APP_ROOT_RE = re.compile(
+    r"<(?:div|main|section|app-root)\b[^>]*\bid=[\"'](?:root|app|__next|__nuxt|application)[\"'][^>]*>\s*"
+    r"</(?:div|main|section|app-root)\s*>",
+    re.IGNORECASE,
+)
+_SCRIPT_SRC_RE = re.compile(rb"<script\b[^>]*\bsrc=", re.IGNORECASE)
+_HYDRATION_RE = re.compile(
+    rb"__NEXT_DATA__|__NUXT__|__INITIAL_STATE__|window\.__PRELOADED_STATE__|data-reactroot",
+    re.IGNORECASE,
+)
+_TAG_RE = re.compile(rb"<[^>]+>")
+_SCRIPT_BLOCK_RE = re.compile(
+    rb"<(script|style|noscript|template)\b.*?</\1\s*>", re.IGNORECASE | re.DOTALL
+)
+
+#: Below this much visible text a page is not carrying an article, a listing or a
+#: product — whatever it is, it is not the content we came for.
+CSR_MAX_VISIBLE_TEXT = 400
+
+
+def _visible_text_length(body: bytes) -> int:
+    stripped = _SCRIPT_BLOCK_RE.sub(b" ", body)
+    stripped = _TAG_RE.sub(b" ", stripped)
+    return len(b" ".join(stripped.split()))
+
+
+def looks_like_csr_shell(body: bytes, content_type: str) -> bool:
+    """Is this markup a client-rendered shell rather than the page itself?
+
+    Deliberately a combination of signals. A single marker is not enough: plenty
+    of server-rendered pages contain an element called ``app``, and plenty of
+    thin pages are simply thin. The shell is recognised by markup that ships a
+    mounting point and a script bundle while carrying almost no readable text.
+    """
+
+    if "html" not in content_type.lower():
+        return False
+    if _visible_text_length(body) >= CSR_MAX_VISIBLE_TEXT:
+        return False  # there is real content here, whatever else is going on
+
+    text = body.decode("utf-8", errors="ignore")
+    has_empty_root = bool(_APP_ROOT_RE.search(text))
+    external_scripts = len(_SCRIPT_SRC_RE.findall(body))
+    has_hydration = bool(_HYDRATION_RE.search(body))
+
+    # An empty mount point, or a script-only document that announces hydration.
+    return has_empty_root or (external_scripts >= 2 and has_hydration)
 
 
 def _headers_lower(headers: Mapping[str, str] | None) -> dict[str, str]:
@@ -264,6 +315,20 @@ def classify_response(
             text = payload.decode("utf-8", errors="ignore")
             missing = [canary for canary in selected_rules.all_canaries if canary not in text]
             if missing:
+                # Distinguish "the page changed" from "the page has not rendered
+                # yet". A client-rendered shell is not a broken profile: the
+                # markup arrived and the data is fetched by script, so the answer
+                # is a browser, not an extractor fix. Reporting PARSE_FAIL here
+                # would strand every JavaScript site, because PARSE_FAIL never
+                # unlocks L2.
+                if looks_like_csr_shell(payload, content_type):
+                    return TriageResult(
+                        Verdict.CSR_REQUIRED,
+                        "client-rendered shell: markup arrived but the content is "
+                        f"script-loaded (canary {missing[0]!r} absent)",
+                        status,
+                        len(payload),
+                    )
                 return TriageResult(
                     Verdict.PARSE_FAIL,
                     f"canary {missing[0]!r} was not found",

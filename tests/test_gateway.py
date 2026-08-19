@@ -399,3 +399,31 @@ class GatewayEscalationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CsrEscalationTests(unittest.TestCase):
+    """The gap this verdict exists to close: a JS site must reach the browser."""
+
+    def test_a_csr_shell_escalates_to_the_browser_and_resolves(self) -> None:
+        profile = make_profile(
+            {"type": "direct_http", "level": "L1"},
+            [{"type": "dynamic", "level": "L2"}],
+        )
+        l1 = FakeTransport({PAGE_URL: [fixture_response("csr-shell", PAGE_URL)]})
+        l2 = FakeTransport({PAGE_URL: [fixture_response("success")]})
+        outcome = gateway_for(profile, {"L1": l1, "L2": l2}).fetch_url(PAGE_URL)
+
+        self.assertEqual(outcome.result.verdict, Verdict.OK)
+        self.assertEqual(
+            [(a.level.value, a.verdict.value) for a in outcome.result.attempts],
+            [("L1", "CSR_REQUIRED"), ("L2", "OK")],
+        )
+
+    def test_a_csr_site_with_no_browser_route_never_becomes_a_paid_candidate(self) -> None:
+        profile = make_profile({"type": "direct_http", "level": "L1"})
+        l1 = FakeTransport({PAGE_URL: [fixture_response("csr-shell", PAGE_URL)]})
+        outcome = gateway_for(profile, {"L1": l1}).fetch_url(PAGE_URL)
+
+        self.assertEqual(outcome.result.verdict, Verdict.CSR_REQUIRED)
+        # Rendering is our job, not a provider's: this must not read as "buy credits".
+        self.assertFalse(outcome.paid_escalation_candidate)

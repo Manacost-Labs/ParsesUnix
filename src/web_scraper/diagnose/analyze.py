@@ -52,6 +52,11 @@ _PLAYBOOK: Mapping[str, tuple[str, str]] = {
         "the response arrived but the expected content/fields were not found",
         "a profile problem, not a network one: run ws-regress against the baseline fixture",
     ),
+    Verdict.CSR_REQUIRED.value: (
+        "the page is a client-rendered shell: markup arrived, data is script-loaded",
+        "render it (L2) and, better, use browser recon to find the JSON endpoint "
+        "the page itself calls, then move the route to L0",
+    ),
     Verdict.THIN_CONTENT.value: (
         "a 2xx response too small to be the real page",
         "check the route returns full content (pagination/redirect/consent wall), not a stub",

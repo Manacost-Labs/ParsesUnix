@@ -2,9 +2,23 @@
   "name": "csr-shell",
   "url": "https://demo-store.example/catalog",
   "status": 200,
-  "headers": {"Content-Type": "text/html; charset=utf-8"},
+  "headers": {
+    "Content-Type": "text/html; charset=utf-8"
+  },
   "body_file": "body.html",
-  "rules": {"min_body_bytes": 200, "canary": "<article", "expected_content_type": "html"},
-  "expected": {"verdict": "PARSE_FAIL", "paid_escalation_allowed": false},
-  "probe_expectations": {"rendering": "csr", "start_level": "L2", "needs_browser_recon": true}
+  "rules": {
+    "min_body_bytes": 200,
+    "canary": "<article",
+    "expected_content_type": "html"
+  },
+  "expected": {
+    "verdict": "CSR_REQUIRED",
+    "paid_escalation_allowed": false
+  },
+  "probe_expectations": {
+    "rendering": "csr",
+    "start_level": "L2",
+    "needs_browser_recon": true,
+    "note": "A client-rendered shell must reach the browser. PARSE_FAIL would strand it, because PARSE_FAIL never unlocks L2."
+  }
 }

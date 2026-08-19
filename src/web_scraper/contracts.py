@@ -24,17 +24,22 @@ class Verdict(StrEnum):
     BLOCKED = "BLOCKED"
     SOFT_BLOCK = "SOFT_BLOCK"
     THIN_CONTENT = "THIN_CONTENT"
+    #: HTTP 200 carrying a client-rendered shell: the markup arrived, the data
+    #: did not. Rendering is the answer, so this unlocks the browser — but it is
+    #: not evidence of blocking and must never justify paying a provider.
+    CSR_REQUIRED = "CSR_REQUIRED"
     NOT_MODIFIED = "NOT_MODIFIED"  # 304 to a conditional request: unchanged, keep prior data
     PROVIDER_ERROR = "PROVIDER_ERROR"
     PARSE_FAIL = "PARSE_FAIL"
 
 
 #: Verdicts that may unlock the next *free* level (L1/L2 browser retry).
-FREE_ESCALATION_VERDICTS = frozenset({Verdict.BLOCKED, Verdict.SOFT_BLOCK})
+FREE_ESCALATION_VERDICTS = frozenset({Verdict.BLOCKED, Verdict.SOFT_BLOCK, Verdict.CSR_REQUIRED})
 
 #: The only verdicts that may ever justify a *paid* (L3/L4) escalation.
-#: A strict subset of the free set: reaching a browser is cheap, spending money
-#: is not, so THIN_CONTENT and a bare-403 BLOCKED-by-status never pay on their own.
+#: A strict subset of the free set: reaching a browser is cheap, spending money is
+#: not. A client-rendered page is not a blocked page — it needs rendering, which
+#: we can do ourselves — so CSR_REQUIRED is deliberately absent here.
 PAID_ESCALATION_VERDICTS = frozenset({Verdict.BLOCKED, Verdict.SOFT_BLOCK})
 
 
