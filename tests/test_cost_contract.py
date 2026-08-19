@@ -51,10 +51,27 @@ class CostValueTests(unittest.TestCase):
 
     def test_an_attributed_unknown_cannot_be_constructed(self) -> None:
         # Otherwise a caller could build something that reads as a known zero.
+        from web_scraper.contracts import CostCertainty
+
         with self.assertRaises(ValueError):
-            Cost(credits=None, attributed=True)
+            Cost(credits=None, certainty=CostCertainty.EXACT)
         with self.assertRaises(ValueError):
-            Cost(credits=Decimal("5"), attributed=False)
+            Cost(credits=Decimal("5"), certainty=CostCertainty.UNKNOWN)
+
+    def test_attributed_is_derived_so_it_cannot_disagree(self) -> None:
+        # It used to be a stored field. Two fields for one fact drift apart.
+        from web_scraper.contracts import CostCertainty
+
+        self.assertTrue(Cost.of("5").attributed)
+        self.assertTrue(Cost.provisional("5").attributed, "bounded is still attributable")
+        self.assertFalse(Cost.unknown().attributed)
+        self.assertIs(Cost.provisional("5").certainty, CostCertainty.PROVISIONAL)
+
+    def test_a_provisional_cost_is_an_upper_bound_not_a_measurement(self) -> None:
+        provisional = Cost.provisional("2")
+        self.assertFalse(provisional.is_exact)
+        self.assertTrue(provisional.is_known, "bounded, so a batch may continue")
+        self.assertIn("<=", str(provisional), "it reads as a ceiling, not a figure")
 
     def test_it_survives_a_round_trip(self) -> None:
         for cost in (Cost.free(), Cost.of("2.5"), Cost.unknown()):

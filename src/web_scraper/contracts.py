@@ -201,55 +201,138 @@ class TriageResult:
         }
 
 
+class CostCertainty(StrEnum):
+    """How well we know what a call cost.
+
+    The three levels are not degrees of confidence — they are three different
+    epistemic situations, and collapsing any pair of them loses money:
+
+    ``EXACT``
+        The provider reported the actual spend for this call. The number is
+        theirs, not ours.
+    ``PROVISIONAL``
+        The provider did not report a per-call figure, but a **documented,
+        conservative upper bound** exists — a published tariff we can defend.
+        The recorded amount is that ceiling, so the true cost is at most this.
+    ``UNKNOWN``
+        No safe upper bound can be established at all. Spending stops.
+
+    ``PROVISIONAL`` is the dangerous one, because it is the level that lets a
+    batch keep running. It is legitimate *only* when a documented bound exists.
+    Introducing it because a run would otherwise halt turns an honest "we do not
+    know" into a fabricated number, which is the exact failure the ``UNKNOWN``
+    level was created to prevent.
+    """
+
+    EXACT = "EXACT"
+    PROVISIONAL = "PROVISIONAL"
+    UNKNOWN = "UNKNOWN"
+
+    @property
+    def is_bounded(self) -> bool:
+        """Can this cost be given a defensible upper bound?"""
+
+        return self is not CostCertainty.UNKNOWN
+
+
 @dataclass(frozen=True)
 class Cost:
-    """What something cost, including the case where nobody told us.
+    """What something cost, in the provider's own unit and in canonical money.
 
-    Three states that must never be collapsed into each other:
+    Four states that must never be collapsed into each other:
 
-    - :meth:`free` - no paid call happened. A *measured* zero.
-    - :meth:`of` - the provider reported a number. Known spend.
-    - :meth:`unknown` - a paid call happened and its cost is NOT known.
+    - :meth:`free` — no paid call happened. A *measured* zero.
+    - :meth:`of` — the provider reported a number. Known spend, ``EXACT``.
+    - :meth:`provisional` — not reported, but bounded by a documented tariff.
+    - :meth:`unknown` — a paid call happened and no safe bound exists.
 
-    The third state is the reason this type exists. Reporting unknown spend as
-    ``0`` understates the bill, and an understated bill is how a budget is
-    quietly exceeded: every downstream total would look affordable while real
-    money had already left. Unknown stays unknown all the way to the report.
+    The last two exist because reporting unbounded spend as ``0`` understates
+    the bill, and an understated bill is how a budget is quietly exceeded: every
+    downstream total looks affordable while real money has already left.
+
+    ``estimated_usd`` is the canonical unit. Provider credits are not a shared
+    currency — one Scrape.do credit, one Firecrawl credit and one Bright Data
+    request are three different things — so any comparison across vendors has to
+    happen in money. It is ``None`` when no pricing snapshot covered this
+    provider, which is itself worth surfacing rather than defaulting to zero.
     """
 
     credits: Decimal | None = Decimal("0")
-    attributed: bool = True
+    certainty: CostCertainty = CostCertainty.EXACT
+    native_unit: str = "credits"
+    estimated_usd: Decimal | None = None
 
     def __post_init__(self) -> None:
-        # The two fields are one fact expressed twice; disagreement would let a
-        # caller construct an "attributed unknown" that reads as zero.
-        if (self.credits is None) is self.attributed:
-            raise ValueError("credits is None if and only if the cost is unattributed")
+        # One fact, expressed once. An "exact unknown" would read as a known
+        # zero to every caller that only looks at the amount.
+        if (self.credits is None) is not (self.certainty is CostCertainty.UNKNOWN):
+            raise ValueError("credits is None if and only if the certainty is UNKNOWN")
+
+    # -- constructors ------------------------------------------------------
 
     @classmethod
     def free(cls) -> Cost:
         """No paid call. Zero is the truth here, not a placeholder."""
 
-        return cls(credits=Decimal("0"), attributed=True)
+        return cls(credits=Decimal("0"), certainty=CostCertainty.EXACT, estimated_usd=Decimal("0"))
 
     @classmethod
-    def of(cls, credits: Any) -> Cost:
+    def of(cls, credits: Any, *, unit: str = "credits", usd: Decimal | None = None) -> Cost:
         """A reported cost. Anything unparseable is unknown, never zero."""
 
         try:
-            return cls(credits=Decimal(str(credits)), attributed=True)
+            return cls(
+                credits=Decimal(str(credits)),
+                certainty=CostCertainty.EXACT,
+                native_unit=unit,
+                estimated_usd=usd,
+            )
         except (InvalidOperation, ValueError, TypeError):
-            return cls.unknown()
+            return cls.unknown(unit=unit)
 
     @classmethod
-    def unknown(cls) -> Cost:
-        """Spend happened; the amount is not known. Never worth zero."""
+    def provisional(
+        cls, upper_bound: Any, *, unit: str = "credits", usd: Decimal | None = None
+    ) -> Cost:
+        """A documented upper bound, used when the provider reports nothing.
 
-        return cls(credits=None, attributed=False)
+        The caller must have an actual published tariff behind this. There is no
+        way for this type to check that, which is why the rule is stated at every
+        call site instead: a provisional cost without a documented bound is a
+        guess wearing a number's clothes.
+        """
+
+        try:
+            return cls(
+                credits=Decimal(str(upper_bound)),
+                certainty=CostCertainty.PROVISIONAL,
+                native_unit=unit,
+                estimated_usd=usd,
+            )
+        except (InvalidOperation, ValueError, TypeError):
+            return cls.unknown(unit=unit)
+
+    @classmethod
+    def unknown(cls, *, unit: str = "credits") -> Cost:
+        """Spend happened; no defensible bound exists. Never worth zero."""
+
+        return cls(credits=None, certainty=CostCertainty.UNKNOWN, native_unit=unit)
+
+    # -- queries -----------------------------------------------------------
+
+    @property
+    def attributed(self) -> bool:
+        """Derived, not stored: two fields for one fact can disagree."""
+
+        return self.certainty.is_bounded
 
     @property
     def is_known(self) -> bool:
         return self.attributed
+
+    @property
+    def is_exact(self) -> bool:
+        return self.certainty is CostCertainty.EXACT
 
     @property
     def known_credits(self) -> Decimal:
@@ -257,9 +340,29 @@ class Cost:
 
         return self.credits if self.credits is not None else Decimal("0")
 
+    @property
+    def known_usd(self) -> Decimal:
+        """Canonical money, or zero when no pricing snapshot covered it."""
+
+        return self.estimated_usd if self.estimated_usd is not None else Decimal("0")
+
+    def priced(self, usd: Decimal | None) -> Cost:
+        """The same cost, with canonical money attached."""
+
+        return Cost(
+            credits=self.credits,
+            certainty=self.certainty,
+            native_unit=self.native_unit,
+            estimated_usd=usd,
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "credits": str(self.credits) if self.credits is not None else None,
+            "certainty": self.certainty.value,
+            "native_unit": self.native_unit,
+            "estimated_usd": str(self.estimated_usd) if self.estimated_usd is not None else None,
+            # Kept so existing consumers of the report keep working.
             "attributed": self.attributed,
         }
 
@@ -268,14 +371,31 @@ class Cost:
         if data is None:
             return cls.free()
         if isinstance(data, Mapping):
-            if not data.get("attributed", True):
-                return cls.unknown()
-            return cls.of(data.get("credits", "0"))
-        # A bare scalar is the pre-structured form; treat it as reported.
+            certainty_raw = data.get("certainty")
+            if certainty_raw is None:
+                # Pre-certainty form: attributed True/False only.
+                certainty = (
+                    CostCertainty.EXACT if data.get("attributed", True) else CostCertainty.UNKNOWN
+                )
+            else:
+                certainty = CostCertainty(certainty_raw)
+            unit = str(data.get("native_unit", "credits"))
+            usd_raw = data.get("estimated_usd")
+            usd = Decimal(str(usd_raw)) if usd_raw is not None else None
+            if certainty is CostCertainty.UNKNOWN:
+                return cls.unknown(unit=unit)
+            if certainty is CostCertainty.PROVISIONAL:
+                return cls.provisional(data.get("credits", "0"), unit=unit, usd=usd)
+            return cls.of(data.get("credits", "0"), unit=unit, usd=usd)
+        # A bare scalar is the oldest form; treat it as reported.
         return cls.of(data)
 
     def __str__(self) -> str:
-        return "unknown" if self.credits is None else str(self.credits)
+        if self.credits is None:
+            return "unknown"
+        if self.certainty is CostCertainty.PROVISIONAL:
+            return f"<= {self.credits} {self.native_unit}"
+        return f"{self.credits} {self.native_unit}"
 
 
 @dataclass(frozen=True)

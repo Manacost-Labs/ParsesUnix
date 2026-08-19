@@ -29,6 +29,12 @@ from web_scraper.providers.multi_router import (
     MultiProviderDecision,
     MultiProviderRouter,
 )
+from web_scraper.providers.pricing import (
+    DEFAULT_SNAPSHOTS,
+    PricingBook,
+    PricingSnapshot,
+    StrategyRate,
+)
 from web_scraper.providers.router import PaidDecision, PaidProviderRouter
 from web_scraper.providers.scrape_do import ScrapeDoProvider
 from web_scraper.providers.stats import (
@@ -38,6 +44,7 @@ from web_scraper.providers.stats import (
 )
 
 __all__ = [
+    "DEFAULT_SNAPSHOTS",
     "Admission",
     "BreakerState",
     "BreakerStore",
@@ -51,6 +58,8 @@ __all__ = [
     "PaidDecision",
     "PaidEscalator",
     "PaidProviderRouter",
+    "PricingBook",
+    "PricingSnapshot",
     "Provider",
     "ProviderBreakers",
     "ProviderCost",
@@ -63,4 +72,5 @@ __all__ = [
     "ProviderStrategyKey",
     "ProviderStrategyStats",
     "ScrapeDoProvider",
+    "StrategyRate",
 ]

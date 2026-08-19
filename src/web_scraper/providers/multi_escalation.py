@@ -27,6 +27,7 @@ Every outcome is recorded against that exact ``provider:strategy`` on that exact
 from __future__ import annotations
 
 import hashlib
+import logging
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
@@ -42,8 +43,11 @@ from web_scraper.contracts import (
 from web_scraper.providers.base import ProviderError, ProviderRequest, ProviderResponse
 from web_scraper.providers.breaker import ProviderBreakers
 from web_scraper.providers.multi_router import MultiProviderDecision, MultiProviderRouter
+from web_scraper.providers.pricing import PricingBook
 from web_scraper.providers.stats import ProviderStatsStore, ProviderStrategyKey
 from web_scraper.triage import classify_response
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -102,9 +106,12 @@ class MultiProviderEscalator:
         budget: BudgetLedger,
         stats: ProviderStatsStore | None = None,
         breakers: ProviderBreakers | None = None,
+        pricing: PricingBook | None = None,
     ) -> None:
         self.router = router
         self.budget = budget
+        # The tariff book is the ONLY place a provisional bound may come from.
+        self.pricing = pricing if pricing is not None else PricingBook()
         self.stats = stats if stats is not None else router.stats
         self.breakers = breakers or router.breakers or ProviderBreakers()
         # The router consults the same breakers when ranking, so a tripped
@@ -192,10 +199,22 @@ class MultiProviderEscalator:
                 strategy_id=strategy_id,
             )
 
-        # 7. Settle at the reported cost. None means unknown, not free.
+        # 7. Settle. A provider that reported nothing gets a PROVISIONAL ceiling
+        #    only when its tariff is documented and deterministic; otherwise the
+        #    answer is UNKNOWN and spending stops. That rule lives in the pricing
+        #    book so it is stated once, not re-derived per adapter.
         reported = response.cost.credits if response.cost.attributed else None
-        self.budget.settle(reservation, actual_credits=reported)
-        cost = Cost.unknown() if reported is None else Cost.of(reported)
+        cost = self.pricing.settle(provider_name, strategy_id, reported)
+        # A provisional cost is settled at its CEILING, so the ledger never
+        # under-counts: the true spend is at most what we recorded.
+        self.budget.settle(reservation, actual_credits=cost.credits)
+        drift = (
+            self.pricing.detect_drift(provider_name, strategy_id, reported)
+            if reported is not None
+            else None
+        )
+        if drift:
+            logger.warning("pricing drift: %s", drift)
 
         # 8. Canonical validation. The provider's 200 proves nothing.
         triage = classify_response(
