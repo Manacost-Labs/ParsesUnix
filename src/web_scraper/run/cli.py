@@ -25,6 +25,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Report what the paid work would cost and exit. Makes no paid calls.",
     )
+    parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help="Check the environment and exit. Makes no fetches.",
+    )
+    parser.add_argument(
+        "--skip-preflight",
+        action="store_true",
+        help="Start even if preflight fails. For recovery situations only.",
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -45,6 +55,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         runner = Runner(config, alerter=LoggingAlerter())
     except (ProfileError, OSError, ValueError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
+        return 2
+
+    from web_scraper.run.preflight import preflight
+
+    checks = preflight(config)
+    if args.preflight:
+        print(json.dumps({"ok": checks.ok, "preflight": checks.to_dict()}, indent=2))
+        return 0 if checks.ok else 1
+    if not checks.ok and not args.skip_preflight:
+        # Failing here costs nothing. Failing at minute forty of a paid run has
+        # already spent money and left a half-finished dataset.
+        print(
+            json.dumps({"ok": False, "error": "preflight failed", "preflight": checks.to_dict()}),
+            file=sys.stderr,
+        )
         return 2
 
     if args.estimate_cost:

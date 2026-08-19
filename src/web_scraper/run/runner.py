@@ -12,8 +12,11 @@ Ties the pieces together with the invariants the whole project exists for:
 from __future__ import annotations
 
 import logging
+import signal
+import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from typing import Any
 
@@ -136,6 +139,9 @@ class Runner:
             allowed=self._allowed_phases(),
         )
         self._canary_reports: dict[str, Any] = {}
+        #: Set by a signal handler or by request_stop(). Read between URLs, so a
+        #: shutdown never interrupts a paid call it cannot account for.
+        self._stopping = False
 
     def _allowed_phases(self) -> tuple[Phase, ...]:
         """A run with no funded paid layer never enters a paid phase."""
@@ -183,6 +189,10 @@ class Runner:
     # -- public ------------------------------------------------------------
 
     def run(self) -> RunResult:
+        with self._shutdown_handlers():
+            return self._run()
+
+    def _run(self) -> RunResult:
         # Track whether each seeded URL actually reached the queue: a URL lost
         # between the caller and the ledger would otherwise be invisible.
         seeded: dict[str, bool] = {}
@@ -305,10 +315,51 @@ class Runner:
     # -- phases ------------------------------------------------------------
 
     def _out_of_time(self, start: float) -> bool:
+        """Stop claiming new work: the window closed, or someone asked us to.
+
+        Both mean the same thing to the loop — finish the URL in hand, claim no
+        more, and let the run report what it carried. A shutdown that killed the
+        current URL mid-flight would leave it IN_PROGRESS and, if it was a paid
+        attempt, leave the spend unresolved.
+        """
+
+        if self._stopping:
+            return True
         return (
             self.config.deadline_seconds is not None
             and (self._clock() - start) >= self.config.deadline_seconds
         )
+
+    def request_stop(self, reason: str = "shutdown requested") -> None:
+        """Ask the run to wind down after the URL currently in flight."""
+
+        if not self._stopping:
+            logger.warning("%s; finishing the current URL and stopping", reason)
+        self._stopping = True
+
+    @contextmanager
+    def _shutdown_handlers(self) -> Iterator[None]:
+        """Turn SIGTERM/SIGINT into a request to wind down, not a kill.
+
+        Only installed when running on the main thread: signal handlers are
+        process-global, and a library used inside someone else's service must
+        not silently take over its signal handling.
+        """
+
+        installed: list[tuple[signal.Signals, Any]] = []
+        if threading.current_thread() is threading.main_thread():
+            for signum in (signal.SIGTERM, signal.SIGINT):
+                try:
+                    previous = signal.signal(signum, lambda s, _f: self.request_stop(f"signal {s}"))
+                except (ValueError, OSError):  # pragma: no cover - platform dependent
+                    continue
+                installed.append((signum, previous))
+        try:
+            yield
+        finally:
+            for signum, previous in installed:
+                with suppress(ValueError, OSError):
+                    signal.signal(signum, previous)
 
     def _run_phase(self, phase: Phase, *, start: float) -> int:
         """Drain one phase. Paid phases use a different gateway entirely."""

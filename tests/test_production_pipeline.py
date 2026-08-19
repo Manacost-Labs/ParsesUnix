@@ -273,3 +273,47 @@ class ResumeTests(PipelineCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ShutdownTests(PipelineCase):
+    """A run asked to stop must wind down, not be killed mid-URL."""
+
+    def test_a_stop_request_ends_the_run_without_losing_urls(self) -> None:
+        runner = self.runner({}, count=60)
+        original = runner._process_guarded
+
+        def stop_after_first(queued, **kw):
+            original(queued, **kw)
+            runner.request_stop("test")
+
+        runner._process_guarded = stop_after_first  # type: ignore[method-assign]
+        result = runner.run()
+
+        accounting = result.report["accounting"]
+        self.assertEqual(accounting["unaccounted"], 0, "no URL was lost")
+        self.assertEqual(accounting["lost_in_progress"], 0, "nothing left mid-flight")
+        self.assertGreater(
+            sum(accounting["carried_to_next_run"].values()),
+            0,
+            "unfinished work is carried to the next run",
+        )
+
+    def test_stopping_is_idempotent(self) -> None:
+        runner = self.runner({}, count=5)
+        runner.request_stop()
+        runner.request_stop()
+        self.assertTrue(runner._stopping)
+
+    def test_handlers_are_restored_after_the_run(self) -> None:
+        import signal
+
+        before = signal.getsignal(signal.SIGTERM)
+        self.runner({}, count=5).run()
+        self.assertIs(signal.getsignal(signal.SIGTERM), before, "we gave the process back")
+
+    def test_a_deadline_also_stops_claiming_new_work(self) -> None:
+        ticks = iter([0.0] + [10_000.0] * 200)
+        runner = self.runner({}, count=60, deadline_seconds=1.0)
+        runner._clock = lambda: next(ticks, 10_000.0)  # type: ignore[method-assign]
+        result = runner.run()
+        self.assertEqual(result.report["accounting"]["lost_in_progress"], 0)
