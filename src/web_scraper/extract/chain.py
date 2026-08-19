@@ -15,7 +15,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from web_scraper.contracts import ContentKind
 from web_scraper.extract import dom
+from web_scraper.extract.content_kind import detect_content_kind
+from web_scraper.extract.json_path import walk_many
 from web_scraper.extract.normalize import normalize_value
 
 # schema.org / OpenGraph aliases so a JSON-LD or meta extractor can resolve a
@@ -179,11 +182,25 @@ def _one_extractor(
     fields: Sequence[str],
     field_kinds: Mapping[str, str],
     base_url: str | None,
+    json_document: Any = None,
 ) -> dict[str, Any]:
     """Return {field: normalized_value} for the fields this extractor can supply."""
 
     out: dict[str, Any] = {}
-    if kind == "json_ld":
+    if kind == "json":
+        # A pure JSON response. The document is the data, so there is no DOM to
+        # build and no markup to search — the point of treating JSON as a
+        # first-class kind rather than as HTML that happens to parse.
+        mapping = spec.get("fields") or {}
+        document = json_document
+        if document is not None:
+            for f, path in mapping.items():
+                raw = walk_many(document, str(path))
+                if raw is not None and raw != []:
+                    out[f] = normalize_value(
+                        raw, kind=field_kinds.get(f, "text"), base_url=base_url
+                    )
+    elif kind == "json_ld":
         obj = _json_ld_object(text, spec.get("schema_type"))
         if obj:
             for f in fields:
@@ -234,13 +251,36 @@ def extract_fields(
     fields: Sequence[str],
     field_kinds: Mapping[str, str] | None = None,
     base_url: str | None = None,
+    content_kind: ContentKind | None = None,
 ) -> ExtractionResult:
-    """First-non-null-wins across the extractor chain, with provenance."""
+    """First-non-null-wins across the extractor chain, with provenance.
+
+    When the body is JSON, no DOM is built and no markup is searched. That is
+    the practical point of treating JSON as a first-class kind: parsing a large
+    API response into an HTML tree in order to find a field that a dotted path
+    already names is work with no purpose.
+    """
 
     text = _decode(body)
-    tree = dom.parse_html(text)
-    app_state = _extract_app_state(text)
     field_kinds = field_kinds or {}
+    is_json = content_kind is ContentKind.JSON
+
+    json_document: Any = None
+    if is_json:
+        try:
+            # lstrip covers the BOM after decode, plus any leading whitespace.
+            json_document = json.loads(text.lstrip("\ufeff \t\r\n"))
+        except json.JSONDecodeError:
+            # Declared JSON that will not parse. The extractors that need a
+            # document produce nothing; a configured html extractor still gets
+            # its chance below, because a JSON endpoint answering with an error
+            # page is exactly the case worth surviving.
+            json_document = None
+            is_json = False
+
+    # Built lazily: an HTML tree for a JSON response is pure cost.
+    tree = dom.Node("", {}, []) if is_json else dom.parse_html(text)
+    app_state = None if is_json else _extract_app_state(text)
 
     data: dict[str, Any] = {}
     sources: dict[str, str] = {}
@@ -255,12 +295,52 @@ def extract_fields(
             fields=fields,
             field_kinds=field_kinds,
             base_url=base_url,
+            json_document=json_document,
         )
         for f, value in produced.items():
             if f not in data and value is not None and value != "":
                 data[f] = value
-                sources[f] = kind
+                # "json_path" rather than "json": the drift gate ranks sources,
+                # and it needs to see a field falling from a named path to a
+                # heuristic as the degradation it is.
+                sources[f] = "json_path" if kind == "json" else kind
     return ExtractionResult(data=data, sources=sources)
+
+
+def extract_response(
+    body: bytes,
+    *,
+    headers: Mapping[str, str] | None = None,
+    extractors: Sequence[Mapping[str, Any]],
+    fields: Sequence[str],
+    field_kinds: Mapping[str, str] | None = None,
+    base_url: str | None = None,
+) -> tuple[ExtractionResult, ContentKind]:
+    """Detect what the response is, then extract accordingly.
+
+    The one entry point a caller holding a raw response should use. It returns
+    the detected kind alongside the result so a report can say *why* nothing was
+    extracted — "the endpoint answered with a PDF" is an answer; an empty result
+    with no explanation is not.
+    """
+
+    kind = detect_content_kind(body, headers)
+    if kind is ContentKind.BINARY:
+        # Never handed to an extractor. Decoding a video to look for a headline
+        # is expensive and cannot succeed.
+        return ExtractionResult(data={}, sources={}), kind
+
+    return (
+        extract_fields(
+            body,
+            extractors=extractors,
+            fields=fields,
+            field_kinds=field_kinds,
+            base_url=base_url,
+            content_kind=kind,
+        ),
+        kind,
+    )
 
 
 def run_quorum(

@@ -12,14 +12,22 @@ from web_scraper.extract.chain import (
     ExtractionResult,
     FieldValue,
     extract_fields,
+    extract_response,
     run_quorum,
 )
+from web_scraper.extract.content_kind import detect_content_kind
+from web_scraper.extract.json_path import JsonPathError, validate_path, walk_many
 from web_scraper.extract.normalize import normalize_value
 
 __all__ = [
     "ExtractionResult",
     "FieldValue",
+    "JsonPathError",
+    "detect_content_kind",
     "extract_fields",
+    "extract_response",
     "normalize_value",
     "run_quorum",
+    "validate_path",
+    "walk_many",
 ]

@@ -201,6 +201,29 @@ class TriageResult:
         }
 
 
+class ContentKind(StrEnum):
+    """What a response actually *is*, as distinct from what it claims to be.
+
+    The distinction earns its place because ``Content-Type`` is frequently
+    wrong. Plenty of APIs answer JSON as ``text/plain``; plenty of error pages
+    answer HTML with a JSON content type. Extracting with the wrong assumption
+    does not raise — it silently returns nothing, which is the worst possible
+    failure for a data pipeline.
+    """
+
+    HTML = "HTML"
+    JSON = "JSON"
+    TEXT = "TEXT"
+    BINARY = "BINARY"
+    UNKNOWN = "UNKNOWN"
+
+    @property
+    def is_extractable(self) -> bool:
+        """Is there any point handing this to an extractor?"""
+
+        return self in {ContentKind.HTML, ContentKind.JSON, ContentKind.TEXT}
+
+
 class CostCertainty(StrEnum):
     """How well we know what a call cost.
 
