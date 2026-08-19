@@ -283,6 +283,22 @@ class QueueStore:
                 (status.value, verdict, content_hash, natural_key, now, normalize_url(url)),
             )
 
+    def defer(self, url: str) -> None:
+        """Return a claimed URL to the queue without counting an attempt.
+
+        A phase that does not take a URL must hand it back: leaving it
+        IN_PROGRESS loses it for this run, and counting an attempt would push it
+        toward the dead-zone threshold for work that never happened.
+        """
+
+        now = self._now()
+        with closing(self._connect()) as conn, conn:
+            conn.execute(
+                "UPDATE urls SET status = 'PENDING', updated_at = ? "
+                "WHERE url = ? AND status = 'IN_PROGRESS'",
+                (now, normalize_url(url)),
+            )
+
     # -- recovery / inspection --------------------------------------------
 
     def reset_stale_in_progress(self) -> int:

@@ -24,6 +24,13 @@ from web_scraper.fetchers import CircuitBreaker, FetchGateway, RawResponse
 from web_scraper.fetchers.browser_pool import BrowserPool
 from web_scraper.fetchers.gateway import GatewayOutcome, default_transport_provider
 from web_scraper.fingerprints import FingerprintStore
+from web_scraper.finops.canary import CanaryStatus, PaidCanary
+from web_scraper.finops.free_canary import (
+    CanaryUrl,
+    FreeCanary,
+    FreeCanaryOutcome,
+    FreeCanaryStatus,
+)
 from web_scraper.freshness import FreshnessStore
 from web_scraper.observability import Alerter, AlertEvent, LoggingAlerter, RunMetrics
 from web_scraper.observability.accounting import build_accounting
@@ -36,14 +43,22 @@ from web_scraper.publish import (
     summarize_availability,
 )
 from web_scraper.publish.availability import summarize_by_url_class
+from web_scraper.publish.drift import DriftReport, SchemaSnapshot, check_drift
 from web_scraper.queue import QueueStore, normalize_url
 from web_scraper.queue.store import QueuedUrl
 from web_scraper.routing import RouteStatsStore
 from web_scraper.routing.router import AdaptiveRouter
 from web_scraper.run.config import RunConfig
+from web_scraper.run.paid_ledger import PaidAttemptLedger, PaidAttemptState
+from web_scraper.run.phases import Phase, PhaseController, PhaseStore, admits
 from web_scraper.storage.snapshots import SnapshotStore
 
 logger = logging.getLogger(__name__)
+
+#: Below this many pending URLs a free canary is not worth running: the sample
+#: would be most of the queue, so it would fetch the run twice rather than
+#: preview it. See ``_run_free_canary``.
+MIN_QUEUE_FOR_CANARY = 50
 
 # Verdict -> retry backoff (seconds) for transient failures.
 _RETRY_BACKOFF = {Verdict.RATE_LIMITED: 1800.0, Verdict.ORIGIN_DOWN: 7200.0}
@@ -104,6 +119,66 @@ class Runner:
             router=AdaptiveRouter(self.route_stats) if config.adaptive_routing else None,
         )
         self._results: list[Result] = []
+        self._escalator: Any = None
+        self._paid_router: Any = None
+
+        # The paid gateway is a SEPARATE instance. Phase A must be unable to
+        # spend by construction, not by a flag someone can flip: the free
+        # gateway has no escalator attached, so there is no code path from it
+        # to a provider at all.
+        self._paid_gateway = self._build_paid_gateway() if gateway is None else None
+        self._paid_ledger = PaidAttemptLedger(
+            config.state_dir / "paid_attempts.sqlite3", now=wall_clock
+        )
+        self._phases = PhaseController(
+            run_id=config.effective_run_id,
+            store=PhaseStore(config.state_dir / "phases.sqlite3", now=wall_clock),
+            allowed=self._allowed_phases(),
+        )
+        self._canary_reports: dict[str, Any] = {}
+
+    def _allowed_phases(self) -> tuple[Phase, ...]:
+        """A run with no funded paid layer never enters a paid phase."""
+
+        if self._paid_gateway is None:
+            return (Phase.FREE, Phase.FREE_RETRY)
+        return (Phase.FREE, Phase.FREE_RETRY, Phase.CHEAP_PAID, Phase.EXPENSIVE_PAID)
+
+    def _build_paid_gateway(self) -> FetchGateway | None:
+        """A second gateway that CAN spend, used only in the paid phases."""
+
+        if self.budget is None:
+            return None
+        from web_scraper.providers.breaker import BreakerStore, ProviderBreakers
+        from web_scraper.providers.multi_escalation import MultiProviderEscalator
+        from web_scraper.providers.multi_router import MultiProviderRouter
+        from web_scraper.providers.stats import ProviderStatsStore
+        from web_scraper.run.estimate_cli import configured_providers
+
+        providers = configured_providers()
+        if not providers:
+            return None
+
+        router = MultiProviderRouter(
+            providers=providers,
+            stats=ProviderStatsStore(self.config.state_dir / "provider_stats.sqlite3"),
+            breakers=ProviderBreakers(
+                store=BreakerStore(self.config.state_dir / "provider_breakers.sqlite3")
+            ),
+        )
+        self._paid_router = router
+        escalator = MultiProviderEscalator(router, budget=self.budget)
+        self._escalator = escalator
+        return FetchGateway(
+            self.profile,
+            transport_provider=default_transport_provider(browser_pool=self._browser_pool),
+            snapshots=self.snapshots,
+            breaker=CircuitBreaker(),
+            route_stats=self.route_stats,
+            fingerprints=self.fingerprints,
+            router=AdaptiveRouter(self.route_stats) if self.config.adaptive_routing else None,
+            paid_escalator=escalator,
+        )
 
     # -- public ------------------------------------------------------------
 
@@ -139,18 +214,24 @@ class Runner:
 
         start = self._clock()
         processed = 0
-        while True:
-            if (
-                self.config.deadline_seconds is not None
-                and (self._clock() - start) >= self.config.deadline_seconds
-            ):
+
+        # A few free fetches that can stop a very large run. If the site no
+        # longer matches the profile, every remaining URL hits the same wall and
+        # the paid phases would pay to discover it one page at a time.
+        canary = self._run_free_canary()
+        if canary is not None and canary.status is FreeCanaryStatus.BLOCK_RUN:
+            return self._abort_run(canary, seeded, processed)
+
+        for phase in self._phases.remaining():
+            if self._out_of_time(start):
                 break
-            batch = self.queue.claim_batch(self.config.batch_size)
-            if not batch:
-                break
-            for queued in batch:
-                self._process_guarded(queued)
-                processed += 1
+            self._phases.enter(phase)
+
+            if phase.is_paid and not self._paid_phases_permitted():
+                continue
+
+            processed += self._run_phase(phase, start=start)
+            self._phases.complete(phase, counts={"processed": processed})
 
         # The browser is released before reporting: a run must not leave a
         # Chromium behind because report building raised.
@@ -176,8 +257,235 @@ class Runner:
             promote=promote,
             accounting=accounting,
         )
-        self._final_alerts(report.to_dict(), promote)
-        return RunResult(report=report.to_dict(), promote=promote, processed=processed)
+        payload = report.to_dict()
+        payload["canaries"] = self._canary_reports
+        payload["phases"] = self._phases.to_dict()
+        payload["paid_attempts"] = self._paid_ledger.summary()
+        stranded = self._paid_ledger.stranded()
+        if stranded:
+            self.alerter.send(
+                AlertEvent(
+                    kind="stranded_paid_attempt",
+                    message=(
+                        f"{len(stranded)} URL(s) have a paid attempt that never completed; "
+                        "they may have been billed and are held out of the paid layer"
+                    ),
+                    context={"urls": [r.url for r in stranded][:20]},
+                )
+            )
+        self._final_alerts(payload, promote)
+        return RunResult(report=payload, promote=promote, processed=processed)
+
+    def _abort_run(
+        self, canary: FreeCanaryOutcome, seeded: dict[str, bool], processed: int
+    ) -> RunResult:
+        """Stop before the crawl, keeping every URL and publishing nothing.
+
+        A blocked canary must not look like a completed run with poor coverage:
+        nothing was attempted, so nothing is promoted and the consumer stays on
+        the previous dataset.
+        """
+
+        self._close_browser_pool()
+        accounting = build_accounting(self.queue.counts_by_status(), seeded_urls=seeded)
+        self.metrics.availability = self._availability_slo()
+        report = build_report(
+            self._results,
+            metrics=self.metrics,
+            quarantined_urls=[q["url"] for q in self.queue.quarantined()],
+            dead_zone_urls=[d["url"] for d in self.queue.dead_zones()],
+            promote={"ok": False, "reason": "free canary blocked the run", "staged": 0},
+            accounting=accounting,
+        )
+        payload = report.to_dict()
+        payload["canaries"] = self._canary_reports
+        payload["aborted"] = True
+        return RunResult(report=payload, promote=None, processed=processed)
+
+    # -- phases ------------------------------------------------------------
+
+    def _out_of_time(self, start: float) -> bool:
+        return (
+            self.config.deadline_seconds is not None
+            and (self._clock() - start) >= self.config.deadline_seconds
+        )
+
+    def _run_phase(self, phase: Phase, *, start: float) -> int:
+        """Drain one phase. Paid phases use a different gateway entirely."""
+
+        gateway = self._paid_gateway if phase.is_paid else self._gateway
+        processed = 0
+        while True:
+            if self._out_of_time(start):
+                break
+            batch = self.queue.claim_batch(self.config.batch_size)
+            if not batch:
+                break
+            for queued in batch:
+                if not self._admits(phase, queued):
+                    # Not this phase's work. Return it to the queue so a later
+                    # phase — or the next run — still sees it. Dropping it here
+                    # is how a URL disappears.
+                    self.queue.defer(queued.url)
+                    continue
+                self._process_guarded(queued, gateway=gateway, phase=phase)
+                processed += 1
+        return processed
+
+    def _admits(self, phase: Phase, queued: QueuedUrl) -> bool:
+        """Does this phase take this URL, given how it last ended?"""
+
+        if phase is Phase.FREE:
+            return True
+        last = queued.verdict
+        if not last:
+            # No prior verdict means phase A never ran it. Only phase A takes
+            # untried URLs; a later phase picking one up would skip the free
+            # attempt entirely and could send it straight to a provider.
+            return False
+        try:
+            verdict = Verdict(last)
+        except ValueError:
+            return False
+        if not admits(phase, verdict):
+            return False
+        # Already attempted, or attempted and never resolved. Paying again is
+        # the one error the budget system exists to prevent.
+        return not (phase.is_paid and not self._paid_ledger.may_attempt(queued.url))
+
+    def _paid_phases_permitted(self) -> bool:
+        """Budget, providers and the paid canary must all say yes."""
+
+        if self._paid_gateway is None or self.budget is None:
+            return False
+        if not self.budget.state().allows_paid_work:
+            self.alerter.send(
+                AlertEvent(
+                    kind="paid_phase_skipped",
+                    message=f"budget state is {self.budget.state().value}; paid phases skipped",
+                    context={"state": self.budget.state().value},
+                )
+            )
+            return False
+        return self._run_paid_canary()
+
+    def _record_paid_outcome(self, url: str, outcome: GatewayOutcome) -> None:
+        """Write down what the paid attempt did, so a restart cannot repeat it."""
+
+        paid = outcome.paid
+        if paid is None:
+            # The gateway never reached the paid step for this URL, so nothing
+            # was risked and it stays eligible.
+            self._paid_ledger.finish(
+                url, state=PaidAttemptState.REFUSED, reason="free routes resolved it"
+            )
+            return
+        state = (
+            PaidAttemptState.REFUSED
+            if not paid.attempted
+            else PaidAttemptState.UNKNOWN
+            if not paid.cost.is_known
+            else PaidAttemptState.SETTLED
+        )
+        self._paid_ledger.finish(
+            url,
+            state=state,
+            cost=paid.cost,
+            verdict=paid.triage.verdict.value if paid.triage else None,
+            provider_hint=getattr(paid, "provider", None),
+            reason=paid.reason,
+        )
+
+    # -- canaries ----------------------------------------------------------
+
+    def _run_free_canary(self) -> FreeCanaryOutcome | None:
+        """Stratified free fetches, run before anything else."""
+
+        if not self.config.free_canary:
+            return None
+        candidates = self._canary_candidates()
+        # A canary is a SAMPLE. On a queue small enough that the sample would
+        # cover most of it, it samples nothing — it just fetches the run twice,
+        # doubling the work and the route statistics. Below the threshold the
+        # run itself is the check.
+        if len(candidates) < MIN_QUEUE_FOR_CANARY:
+            return None
+        try:
+            outcome = FreeCanary().run(candidates, fetch=self._gateway.fetch_url)
+        except Exception:
+            logger.exception("free canary failed to run; continuing without its verdict")
+            return None
+        self._canary_reports["free"] = outcome.to_dict()
+        if outcome.status is not FreeCanaryStatus.PASS:
+            self.alerter.send(
+                AlertEvent(
+                    kind="free_canary",
+                    message=f"free canary: {outcome.status.value}",
+                    context={"explanation": outcome.explain()},
+                )
+            )
+        return outcome
+
+    def _canary_candidates(self) -> list[CanaryUrl]:
+        """A handful of URLs per stratum, drawn from what the queue holds."""
+
+        rows = [r for r in self.queue.all_rows() if r.status.value in ("PENDING", "RETRY")]
+        out: list[CanaryUrl] = []
+        for row in rows:
+            url_class = row.url_class or "unknown"
+            stratum = url_class
+            if row.verdict in {Verdict.CSR_REQUIRED.value, Verdict.BLOCKED.value}:
+                stratum = "unstable"
+            out.append(CanaryUrl(url=row.url, stratum=stratum, url_class=url_class))
+        return out
+
+    def _run_paid_canary(self) -> bool:
+        """Spend a few credits to decide whether to spend many."""
+
+        if not self.config.paid_canary or self._escalator is None:
+            return True
+        candidates = [
+            (row.url, _domain(row.url), row.url_class or "unknown", Verdict(row.verdict))
+            for row in self.queue.all_rows()
+            if row.verdict in {Verdict.BLOCKED.value, Verdict.SOFT_BLOCK.value}
+            and self._paid_ledger.may_attempt(row.url)
+        ]
+        if not candidates:
+            return True
+        outcome = PaidCanary().run(candidates, attempt=self._paid_attempt)
+        self._canary_reports["paid"] = outcome.to_dict()
+        if outcome.status is CanaryStatus.BLOCK_PAID_PHASE:
+            self.alerter.send(
+                AlertEvent(
+                    kind="paid_canary_block",
+                    message="paid canary blocked the paid phases; free results are kept",
+                    context={"explanation": outcome.explain()},
+                )
+            )
+            return False
+        return True
+
+    def _paid_attempt(self, url: str, *, verdict: Verdict, domain: str, url_class: str) -> Any:
+        """One paid attempt, recorded per URL before any money moves."""
+
+        assert self._escalator is not None
+        self._paid_ledger.start(url, provider="?", strategy_id="?")
+        outcome = self._escalator.attempt(url, verdict=verdict, domain=domain, url_class=url_class)
+        state = (
+            PaidAttemptState.REFUSED
+            if not outcome.attempted
+            else PaidAttemptState.UNKNOWN
+            if outcome.unknown_spend
+            else PaidAttemptState.SETTLED
+        )
+        self._paid_ledger.finish(
+            url,
+            state=state,
+            cost=outcome.cost,
+            verdict=outcome.triage.verdict.value if outcome.triage else None,
+            reason=outcome.reason,
+        )
+        return outcome
 
     def _recover_budget(self) -> None:
         """Resolve reservations from a crashed process, and alert if money is lost."""
@@ -225,7 +533,13 @@ class Runner:
 
     # -- per-URL -----------------------------------------------------------
 
-    def _process_guarded(self, queued: QueuedUrl) -> None:
+    def _process_guarded(
+        self,
+        queued: QueuedUrl,
+        *,
+        gateway: FetchGateway | None = None,
+        phase: Phase | None = None,
+    ) -> None:
         """Run one URL so that no failure can abort the run or lose the URL.
 
         Without this, an unexpected error (a malformed body crashing an
@@ -235,7 +549,7 @@ class Runner:
         """
 
         try:
-            self._process(queued)
+            self._process(queued, gateway=gateway or self._gateway, phase=phase)
         except Exception:
             logger.exception("unhandled error while processing %s", queued.url)
             self.queue.mark_failed(queued.url, verdict=Verdict.PARSE_FAIL.value)
@@ -251,7 +565,14 @@ class Runner:
                 )
             )
 
-    def _process(self, queued: QueuedUrl) -> None:
+    def _process(
+        self,
+        queued: QueuedUrl,
+        *,
+        gateway: FetchGateway | None = None,
+        phase: Phase | None = None,
+    ) -> None:
+        gateway = gateway or self._gateway
         url = queued.url
         url_class = self.profile.class_for_url(url)
         if url_class is None:
@@ -267,7 +588,13 @@ class Runner:
             return
 
         conditional = self.freshness.conditional_headers(url)
-        outcome = self._gateway.fetch_url(url, extra_headers=conditional or None)
+        # In a paid phase this gateway carries an escalator; in a free phase it
+        # physically cannot reach a provider.
+        if phase is not None and phase.is_paid:
+            self._paid_ledger.start(url, provider="?", strategy_id="?")
+        outcome = gateway.fetch_url(url, extra_headers=conditional or None)
+        if phase is not None and phase.is_paid:
+            self._record_paid_outcome(url, outcome)
         result = outcome.result
         self._results.append(result)
         last = result.attempts[-1] if result.attempts else None
@@ -452,12 +779,35 @@ class Runner:
             ),
             default=2.0,
         )
+        # Schema drift is checked BEFORE promoting, against the last healthy
+        # dataset. Per-row validation cannot see a field that went uniformly
+        # empty because a CSS class was renamed: every row is individually
+        # valid, the count is right, and the data is wrong.
+        drift = self._check_drift(required)
+        if drift is not None and not drift.verdict.allows_promotion:
+            self.alerter.send(
+                AlertEvent(
+                    kind="drift_block",
+                    message="schema drift blocked promotion; the consumer stays on the LKG",
+                    context={"explanation": drift.explain()},
+                )
+            )
+            return {
+                "ok": False,
+                "reason": "schema drift",
+                "staged": len(self.dataset.staged_rows()),
+                "drift": drift.to_dict(),
+            }
+
         decision = self.dataset.promote(
             required_fields=required,
             expected_count=None,
             min_completeness=min_completeness,
             max_null_rate_growth=max_growth,
         )
+        payload = decision.to_dict()
+        if drift is not None:
+            payload["drift"] = drift.to_dict()
         if not decision.ok:
             self.alerter.send(
                 AlertEvent(
@@ -466,7 +816,22 @@ class Runner:
                     context={"reason": decision.reason, "completeness": decision.completeness},
                 )
             )
-        return decision.to_dict()
+        return payload
+
+    def _check_drift(self, critical_fields: list[str]) -> DriftReport | None:
+        """Compare the staged dataset's SHAPE against the last healthy one."""
+
+        staged = self.dataset.staged_rows()
+        if not staged:
+            return None
+        baseline_rows = self.dataset.clean_rows_with_meta()
+        current = SchemaSnapshot.from_rows([dict(r.get("data") or {}) for r in staged])
+        baseline = (
+            SchemaSnapshot.from_rows([dict(r.get("data") or {}) for r in baseline_rows])
+            if baseline_rows
+            else None
+        )
+        return check_drift(current, baseline, critical_fields=critical_fields)
 
     def _final_alerts(self, report: dict[str, Any], promote: dict[str, Any] | None) -> None:
         if report["dead_zone_urls"]:

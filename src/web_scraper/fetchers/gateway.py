@@ -28,7 +28,7 @@ import socket
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 from web_scraper.contracts import (
@@ -58,7 +58,6 @@ from web_scraper.fingerprints import FailureFingerprint, FingerprintStore, finge
 from web_scraper.probe.safety import Resolver, UnsafeTarget
 from web_scraper.profiles.model import SiteProfile, UrlClass
 from web_scraper.providers.base import ProviderResponse
-from web_scraper.providers.escalation import PaidAttempt, PaidEscalator
 from web_scraper.routing.router import AdaptiveRouter
 from web_scraper.routing.stats import RouteKey, RouteStatsStore
 from web_scraper.storage.snapshots import SnapshotStore
@@ -167,7 +166,7 @@ class GatewayOutcome:
     snapshot_paths: tuple[str, ...]
     #: Present whenever a paid provider was configured and the free routes ended
     #: on a verdict that reached it - including when it declined to spend.
-    paid: PaidAttempt | None = None
+    paid: Any | None = None
 
     @property
     def paid_escalation_candidate(self) -> bool:
@@ -198,6 +197,39 @@ class GatewayOutcome:
         }
 
 
+class PaidAttemptLike(Protocol):
+    """What the gateway needs from a paid attempt, whoever produced it."""
+
+    attempted: bool
+    reason: str
+
+    @property
+    def succeeded(self) -> bool: ...
+
+    @property
+    def cost(self) -> Cost: ...
+
+    triage: TriageResult | None
+    response: ProviderResponse | None
+
+    def to_dict(self) -> dict[str, Any]: ...
+
+
+class PaidEscalatorLike(Protocol):
+    """One paid attempt for one URL. Single-vendor or fleet — same contract."""
+
+    def attempt(
+        self,
+        url: str,
+        *,
+        verdict: Verdict,
+        domain: str,
+        url_class: str,
+        rules: ContentRules | None = ...,
+        wait_selector: str | None = ...,
+    ) -> Any: ...
+
+
 def _raw_from_provider(url: str, response: ProviderResponse) -> RawResponse:
     """Present a provider answer as an ordinary response.
 
@@ -216,15 +248,13 @@ def _raw_from_provider(url: str, response: ProviderResponse) -> RawResponse:
     )
 
 
-def _paid_cost(paid: PaidAttempt) -> Cost:
+def _paid_cost(paid: PaidAttemptLike) -> Cost:
     """A refusal to call is free; a call with no reported cost is unknown."""
 
-    if not paid.attempted:
-        return Cost.free()
-    return Cost.unknown() if paid.actual_cost is None else Cost.of(paid.actual_cost)
+    return paid.cost
 
 
-def _paid_attempt_record(url: str, paid: PaidAttempt, *, free_verdict: Verdict) -> Attempt:
+def _paid_attempt_record(url: str, paid: PaidAttemptLike, *, free_verdict: Verdict) -> Attempt:
     """One ledger line per paid decision, including the decisions not to spend.
 
     A refusal is recorded as an attempt too: a run report that shows only the
@@ -266,7 +296,7 @@ class FetchGateway:
         router: AdaptiveRouter | None = None,
         route_stats: RouteStatsStore | None = None,
         fingerprints: FingerprintStore | None = None,
-        paid_escalator: PaidEscalator | None = None,
+        paid_escalator: PaidEscalatorLike | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.profile = profile
@@ -427,7 +457,7 @@ class FetchGateway:
         # Free routes are done. Only now may money be considered, and only for
         # the two verdicts that mean "the origin refused us", never for a dead
         # URL, an origin outage, or a page we simply failed to parse.
-        paid: PaidAttempt | None = None
+        paid: Any | None = None
         if self._paid is not None and final_verdict in PAID_ESCALATION_VERDICTS:
             paid = self._paid.attempt(
                 url,

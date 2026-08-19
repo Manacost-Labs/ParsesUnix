@@ -17,6 +17,18 @@ from typing import Any
 class RunConfig:
     profile_path: Path
     state_dir: Path
+    #: Identifies one run WINDOW, so a crashed run resumes its phases. Defaults
+    #: to the state directory's name, which is stable across restarts of the
+    #: same scheduled job. A completed cycle does not block the next one - the
+    #: phase controller starts fresh once all phases are done.
+    run_id: str = ""
+    #: Run a stratified free canary before the crawl. Cheap, and it is the only
+    #: thing that stops a 100k run against a redesigned site.
+    free_canary: bool = True
+    #: Run a paid canary before the paid phases. Off means the paid batch starts
+    #: on yesterday's statistics alone.
+    paid_canary: bool = True
+
     seed_urls: tuple[str, ...] = ()
     deadline_seconds: float | None = None  # run-window cap; None = until the queue drains
     batch_size: int = 20
@@ -32,6 +44,10 @@ class RunConfig:
     max_browser_contexts: int = 4
     #: Daily credit ceiling for paid providers. None disables paid work entirely.
     daily_credit_limit: str | None = None
+
+    @property
+    def effective_run_id(self) -> str:
+        return self.run_id or f"run:{self.state_dir.name}"
 
     @property
     def queue_path(self) -> Path:
@@ -77,6 +93,9 @@ class RunConfig:
         return cls(
             profile_path=resolve(data["profile"]),
             state_dir=resolve(data.get("state_dir", "state")),
+            run_id=str(data.get("run_id", "")),
+            free_canary=bool(data.get("free_canary", True)),
+            paid_canary=bool(data.get("paid_canary", True)),
             seed_urls=tuple(data.get("seed_urls", ())),
             deadline_seconds=data.get("deadline_seconds"),
             batch_size=int(data.get("batch_size", 20)),

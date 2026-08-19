@@ -229,8 +229,13 @@ class PhaseController:
 
     def __post_init__(self) -> None:
         loaded = self.store.load(self.run_id) if self.store else None
+        # A completed cycle must not block the next scheduled run. Only an
+        # UNFINISHED cycle is resumed; a finished one starts over, which is what
+        # distinguishes "resume after a crash" from "run again tomorrow".
+        if loaded is not None and loaded.is_complete:
+            loaded = None
         self.state = loaded or PhaseState(run_id=self.run_id)
-        if loaded is None and self.store:
+        if self.store:
             self.store.save(self.state)
 
     @property

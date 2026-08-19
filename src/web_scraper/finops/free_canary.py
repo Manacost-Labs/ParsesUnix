@@ -34,6 +34,7 @@ Verdicts are blunt on purpose:
 
 from __future__ import annotations
 
+import logging
 import random
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -41,6 +42,8 @@ from enum import StrEnum
 from typing import Any
 
 from web_scraper.contracts import Verdict
+
+logger = logging.getLogger(__name__)
 
 #: Fraction of scored canaries that must resolve for a clean pass.
 DEFAULT_PASS_RATE = 0.8

@@ -26,6 +26,7 @@ from web_scraper.budget import BudgetExceeded, BudgetLedger
 from web_scraper.contracts import (
     PAID_ESCALATION_VERDICTS,
     ContentRules,
+    Cost,
     TriageResult,
     Verdict,
 )
@@ -49,6 +50,19 @@ class PaidAttempt:
     reserved: Decimal = Decimal("0")
     actual_cost: Decimal | None = None
     unknown_spend: bool = False
+
+    @property
+    def cost(self) -> Cost:
+        """The same fact as ``actual_cost``, in the canonical type.
+
+        Exists so this escalator and the multi-provider one present one shape to
+        the gateway; a gateway that had to know which escalator it held would
+        grow a branch per vendor strategy.
+        """
+
+        if not self.attempted:
+            return Cost.free()
+        return Cost.unknown() if self.actual_cost is None else Cost.of(self.actual_cost)
 
     @property
     def succeeded(self) -> bool:
