@@ -1,0 +1,299 @@
+"""Choosing across vendors, and the arithmetic that makes it worth doing."""
+
+from __future__ import annotations
+
+import sys
+import tempfile
+import unittest
+from decimal import Decimal
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from web_scraper.contracts import Cost, Verdict
+from web_scraper.providers.base import ProviderStrategy
+from web_scraper.providers.breaker import ProviderBreakers
+from web_scraper.providers.multi_router import MultiProviderRouter
+from web_scraper.providers.stats import ProviderStatsStore, ProviderStrategyKey
+
+DOMAIN, URL_CLASS = "site.example", "page"
+
+
+def strategy(sid, cost, *, render=False, premium=True):
+    return ProviderStrategy(
+        id=sid,
+        nominal_cost=Decimal(str(cost)),
+        renders_javascript=render,
+        premium_network=premium,
+    )
+
+
+class FakeProvider:
+    def __init__(self, name, strategies):
+        self.name, self._strategies = name, strategies
+
+    def strategies(self):
+        return self._strategies
+
+    def fetch(self, request):  # pragma: no cover - routing tests never call
+        raise AssertionError("the router must not fetch")
+
+
+class RouterCase(unittest.TestCase):
+    def setUp(self) -> None:
+        tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        self.stats = ProviderStatsStore(Path(tempdir.name) / "p.sqlite3")
+
+    def observe(self, provider, sid, *, ok: int, fail: int, cost="1") -> None:
+        key = ProviderStrategyKey(
+            provider=provider, strategy_id=sid, domain=DOMAIN, url_class=URL_CLASS
+        )
+        for _ in range(ok):
+            self.stats.record(key, verdict=Verdict.OK, cost=Cost.of(cost))
+        for _ in range(fail):
+            self.stats.record(key, verdict=Verdict.BLOCKED, cost=Cost.of(cost))
+
+    def router(self, providers, **kw) -> MultiProviderRouter:
+        kw.setdefault("_rng", lambda: 1.0)  # no shadow probing unless asked
+        return MultiProviderRouter(providers=providers, stats=self.stats, **kw)
+
+
+class CostPerValidResultTests(RouterCase):
+    """The brief's own example, asserted as arithmetic."""
+
+    def test_the_cheaper_list_price_can_be_the_more_expensive_choice(self) -> None:
+        # A: 1 credit, validates half the time -> 2 per usable result.
+        # B: 1.5 credits, validates ~always    -> ~1.52 per usable result.
+        cheap = FakeProvider("cheap", (strategy("normal", "1"),))
+        steady = FakeProvider("steady", (strategy("normal", "1.5"),))
+        self.observe("cheap", "normal", ok=25, fail=25, cost="1")
+        self.observe("steady", "normal", ok=49, fail=1, cost="1.5")
+
+        decision = self.router([cheap, steady]).choose(
+            domain=DOMAIN, url_class=URL_CLASS, verdict=Verdict.BLOCKED
+        )
+        self.assertEqual(decision.provider, "steady", "ranked on usable results, not list price")
+
+        by_ref = {c.ref: c for c in decision.candidates}
+        self.assertEqual(by_ref["cheap:normal"].expected_cost, Decimal("2.00"))
+        self.assertAlmostEqual(float(by_ref["steady:normal"].expected_cost), 1.53, places=2)
+
+    def test_cost_per_valid_result_is_none_until_something_succeeds(self) -> None:
+        self.observe("p", "s", ok=0, fail=5, cost="1")
+        record = self.stats.get(
+            ProviderStrategyKey(provider="p", strategy_id="s", domain=DOMAIN, url_class=URL_CLASS)
+        )
+        assert record is not None
+        self.assertIsNone(record.cost_per_valid_result, "no valid results: not a number")
+
+    def test_unattributed_spend_makes_cost_per_valid_result_unknowable(self) -> None:
+        key = ProviderStrategyKey(provider="p", strategy_id="s", domain=DOMAIN, url_class=URL_CLASS)
+        self.stats.record(key, verdict=Verdict.OK, cost=Cost.of("5"))
+        self.stats.record(key, verdict=Verdict.OK, cost=Cost.unknown())
+        record = self.stats.get(key)
+        assert record is not None
+        self.assertFalse(record.cost_is_complete)
+        self.assertIsNone(record.cost_per_valid_result, "a floor divided by a count is not a cost")
+        self.assertEqual(record.known_cost, Decimal("5"), "the known part is still reported")
+
+
+class SelectionTests(RouterCase):
+    def test_a_strategy_below_the_confidence_bound_is_refused(self) -> None:
+        weak = FakeProvider("weak", (strategy("normal", "1"),))
+        strong = FakeProvider("strong", (strategy("normal", "10"),))
+        self.observe("weak", "normal", ok=2, fail=18)
+        self.observe("strong", "normal", ok=40, fail=0, cost="10")
+
+        decision = self.router([weak, strong]).choose(
+            domain=DOMAIN, url_class=URL_CLASS, verdict=Verdict.BLOCKED
+        )
+        self.assertEqual(decision.provider, "strong")
+        weak_candidate = next(c for c in decision.candidates if c.provider == "weak")
+        self.assertFalse(weak_candidate.eligible)
+        self.assertIn("below", weak_candidate.reason)
+
+    def test_expensive_is_never_chosen_for_being_expensive(self) -> None:
+        cheap = FakeProvider("cheap", (strategy("normal", "1"),))
+        dear = FakeProvider("dear", (strategy("normal", "40"),))
+        self.observe("cheap", "normal", ok=40, fail=0, cost="1")
+        self.observe("dear", "normal", ok=40, fail=0, cost="40")
+
+        decision = self.router([cheap, dear]).choose(
+            domain=DOMAIN, url_class=URL_CLASS, verdict=Verdict.BLOCKED
+        )
+        self.assertEqual(decision.provider, "cheap")
+
+    def test_a_capability_that_cannot_help_is_not_paid_for(self) -> None:
+        # Rendering does not defeat a hard refusal at the edge.
+        renderer = FakeProvider("r", (strategy("render", "5", render=True, premium=False),))
+        decision = self.router([renderer]).choose(
+            domain=DOMAIN, url_class=URL_CLASS, verdict=Verdict.BLOCKED
+        )
+        self.assertFalse(decision.chosen)
+        self.assertIn("does not address", decision.candidates[0].reason)
+
+    def test_a_tripped_breaker_removes_a_candidate_at_any_price(self) -> None:
+        from web_scraper.providers.base import ProviderErrorKind
+
+        breakers = ProviderBreakers(threshold=1)
+        breakers.record_error("cheap", "normal", ProviderErrorKind.TIMEOUT)
+
+        cheap = FakeProvider("cheap", (strategy("normal", "1"),))
+        other = FakeProvider("other", (strategy("normal", "10"),))
+        self.observe("cheap", "normal", ok=40, fail=0)
+        self.observe("other", "normal", ok=40, fail=0, cost="10")
+
+        decision = self.router([cheap, other], breakers=breakers).choose(
+            domain=DOMAIN, url_class=URL_CLASS, verdict=Verdict.BLOCKED
+        )
+        self.assertEqual(decision.provider, "other")
+
+    def test_nothing_eligible_means_the_url_stays_unresolved(self) -> None:
+        weak = FakeProvider("weak", (strategy("normal", "1"),))
+        self.observe("weak", "normal", ok=0, fail=20)
+        decision = self.router([weak]).choose(
+            domain=DOMAIN, url_class=URL_CLASS, verdict=Verdict.BLOCKED
+        )
+        self.assertFalse(decision.chosen)
+        self.assertIn("stays unresolved", decision.explain())
+
+
+class ColdStartTests(RouterCase):
+    def test_an_untried_strategy_is_explored_not_trusted(self) -> None:
+        fresh = FakeProvider("fresh", (strategy("normal", "1"),))
+        decision = self.router([fresh]).choose(
+            domain=DOMAIN, url_class=URL_CLASS, verdict=Verdict.BLOCKED
+        )
+        candidate = decision.candidates[0]
+        self.assertTrue(candidate.exploring)
+        self.assertEqual(candidate.confidence, 0.0, "no history is not 100% reliable")
+        self.assertIn("exploring", candidate.reason)
+
+    def test_exploration_is_capped_by_calls(self) -> None:
+        # Otherwise a strategy that always fails is retried forever, because it
+        # never gathers enough evidence to be rejected.
+        fresh = FakeProvider("fresh", (strategy("normal", "1"),))
+        key = ProviderStrategyKey(
+            provider="fresh", strategy_id="normal", domain=DOMAIN, url_class=URL_CLASS
+        )
+        for _ in range(10):
+            self.stats.record(key, provider_error=True, cost=Cost.of("1"))
+
+        router = self.router([fresh], min_observations=50, max_exploration_calls=10)
+        decision = router.choose(domain=DOMAIN, url_class=URL_CLASS, verdict=Verdict.BLOCKED)
+        self.assertFalse(decision.chosen)
+        self.assertIn("exploration budget spent", decision.candidates[0].reason)
+
+    def test_exploration_is_capped_by_credits(self) -> None:
+        dear = FakeProvider("dear", (strategy("browser", "40"),))
+        key = ProviderStrategyKey(
+            provider="dear", strategy_id="browser", domain=DOMAIN, url_class=URL_CLASS
+        )
+        self.stats.record(key, verdict=Verdict.BLOCKED, cost=Cost.of("60"))
+
+        router = self.router([dear], min_observations=50, max_exploration_credits=Decimal("50"))
+        decision = router.choose(domain=DOMAIN, url_class=URL_CLASS, verdict=Verdict.BLOCKED)
+        self.assertFalse(decision.chosen)
+        self.assertIn("credits", decision.candidates[0].reason)
+
+
+class NeutralOutcomeTests(RouterCase):
+    def test_an_origin_outage_does_not_damage_a_strategy(self) -> None:
+        key = ProviderStrategyKey(provider="p", strategy_id="s", domain=DOMAIN, url_class=URL_CLASS)
+        for _ in range(20):
+            self.stats.record(key, verdict=Verdict.OK, cost=Cost.of("1"))
+        before = self.stats.get(key)
+        assert before is not None
+
+        for _ in range(20):
+            self.stats.record(key, verdict=Verdict.ORIGIN_DOWN, cost=Cost.of("1"))
+        after = self.stats.get(key)
+        assert after is not None
+
+        self.assertEqual(after.confidence_bound, before.confidence_bound)
+        self.assertEqual(after.neutral_outcomes, 20)
+        self.assertEqual(after.scored_attempts, before.scored_attempts)
+
+    def test_a_provider_error_does_count_against_the_strategy(self) -> None:
+        key = ProviderStrategyKey(provider="p", strategy_id="s", domain=DOMAIN, url_class=URL_CLASS)
+        self.stats.record(key, provider_error=True)
+        record = self.stats.get(key)
+        assert record is not None
+        self.assertEqual(record.provider_errors, 1)
+        self.assertEqual(record.scored_attempts, 1, "the strategy could have avoided this")
+
+
+class ShadowProbeTests(RouterCase):
+    def test_a_cheaper_rejected_option_is_occasionally_retried(self) -> None:
+        cheap = FakeProvider("cheap", (strategy("normal", "1"),))
+        dear = FakeProvider("dear", (strategy("normal", "20"),))
+        self.observe("cheap", "normal", ok=1, fail=19)
+        self.observe("dear", "normal", ok=40, fail=0, cost="20")
+
+        always = self.router([cheap, dear], _rng=lambda: 0.0, shadow_probe_rate=0.05)
+        decision = always.choose(domain=DOMAIN, url_class=URL_CLASS, verdict=Verdict.BLOCKED)
+        self.assertTrue(decision.shadow_probe)
+        self.assertEqual(decision.provider, "cheap", "re-testing the cheap door on purpose")
+
+    def test_without_a_probe_the_trusted_option_is_used(self) -> None:
+        cheap = FakeProvider("cheap", (strategy("normal", "1"),))
+        dear = FakeProvider("dear", (strategy("normal", "20"),))
+        self.observe("cheap", "normal", ok=1, fail=19)
+        self.observe("dear", "normal", ok=40, fail=0, cost="20")
+
+        never = self.router([cheap, dear], _rng=lambda: 1.0)
+        decision = never.choose(domain=DOMAIN, url_class=URL_CLASS, verdict=Verdict.BLOCKED)
+        self.assertFalse(decision.shadow_probe)
+        self.assertEqual(decision.provider, "dear")
+
+
+class IdentityTests(RouterCase):
+    def test_statistics_never_merge_across_providers(self) -> None:
+        a = ProviderStrategyKey(
+            provider="a", strategy_id="normal", domain=DOMAIN, url_class=URL_CLASS
+        )
+        b = ProviderStrategyKey(
+            provider="b", strategy_id="normal", domain=DOMAIN, url_class=URL_CLASS
+        )
+        self.stats.record(a, verdict=Verdict.OK, cost=Cost.of("1"))
+        self.assertIsNone(self.stats.get(b), "same strategy name, different vendor")
+
+    def test_statistics_never_merge_across_url_classes(self) -> None:
+        page = ProviderStrategyKey(
+            provider="a", strategy_id="normal", domain=DOMAIN, url_class="page"
+        )
+        listing = ProviderStrategyKey(
+            provider="a", strategy_id="normal", domain=DOMAIN, url_class="listing"
+        )
+        self.stats.record(page, verdict=Verdict.OK, cost=Cost.of("1"))
+        self.assertIsNone(self.stats.get(listing))
+
+    def test_the_reference_is_stable_and_readable(self) -> None:
+        key = ProviderStrategyKey(
+            provider="scrape_do", strategy_id="normal", domain=DOMAIN, url_class=URL_CLASS
+        )
+        self.assertEqual(key.strategy_ref, "scrape_do:normal")
+
+
+class ExplainabilityTests(RouterCase):
+    def test_the_decision_answers_why_this_vendor_at_this_price(self) -> None:
+        cheap = FakeProvider("cheap", (strategy("normal", "1"),))
+        dear = FakeProvider("dear", (strategy("unlocker", "20"),))
+        self.observe("cheap", "normal", ok=1, fail=19)
+        self.observe("dear", "unlocker", ok=40, fail=0, cost="20")
+
+        decision = self.router([cheap, dear]).choose(
+            domain=DOMAIN, url_class=URL_CLASS, verdict=Verdict.BLOCKED
+        )
+        text = decision.explain()
+        self.assertIn("escalation verdict: BLOCKED", text)
+        self.assertIn("cheap:normal", text, "the rejected option is shown, with its reason")
+        self.assertIn("dear:unlocker", text)
+        self.assertIn("selected: dear:unlocker", text)
+        self.assertIn("holding", text, "the hold is part of the explanation")
+
+
+if __name__ == "__main__":
+    unittest.main()
