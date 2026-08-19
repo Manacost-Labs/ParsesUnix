@@ -48,6 +48,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=[],
         help="Field name to look for in intercepted JSON during browser recon (repeatable).",
     )
+    parser.add_argument(
+        "--discover-api",
+        action="store_true",
+        help=(
+            "Run browser recon and report structured route candidates: verdicts, "
+            "schema signatures, GraphQL operations and pagination. Implies --browser."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.max_body_bytes < 1:
@@ -66,7 +74,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     output: dict[str, Any] = {"ok": True, "report": report.to_dict()}
 
-    if args.browser or args.force_browser:
+    if args.browser or args.force_browser or args.discover_api:
         target_fields = args.target_field or ["title"]
         try:
             recon = browser_recon(
@@ -77,6 +85,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 allow_private=args.allow_private,
             )
             output["browser_recon"] = recon.to_dict()
+            if args.discover_api:
+                # A human-readable listing alongside the JSON: an operator
+                # deciding whether to promote a route should not have to read a
+                # nested document to see what was found and what was refused.
+                discovery = recon.to_dict().get("discovery") or {}
+                output["discovery_report"] = discovery.get("listing", "")
         except BrowserUnavailable as exc:
             output["browser_recon"] = {"executed": False, "error": str(exc)}
 
@@ -87,6 +101,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         output["draft_profile_path"] = str(args.draft_profile)
 
+    if args.discover_api and output.get("discovery_report"):
+        print(output["discovery_report"], file=sys.stderr)
     print(json.dumps(output, ensure_ascii=False, indent=2))
     return 0
 

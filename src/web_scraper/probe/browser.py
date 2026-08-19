@@ -143,6 +143,39 @@ class ApiCandidate:
         return payload
 
 
+def _discover(
+    captured: Sequence[CapturedResponse],
+    *,
+    requested_url: str,
+    target_fields: Sequence[str],
+) -> dict[str, Any]:
+    """Feed what the browser saw into the discovery collector.
+
+    Only one page has been rendered here, so nothing can reach VALIDATED on a
+    single probe: ``min_pages`` stays at its default and the probe reports
+    PROMISING candidates for a human to look at. A probe that promoted a route
+    from one render would be promoting a coincidence.
+    """
+
+    from web_scraper.discovery import DiscoveryCollector, ObservedRequest, summarise
+
+    collector = DiscoveryCollector(wanted_fields=tuple(target_fields))
+    for capture in captured:
+        collector.observe(
+            ObservedRequest(
+                url=capture.url,
+                method=capture.method,
+                status=capture.status,
+                content_type=capture.content_type,
+                resource_type="xhr",
+                request_header_names=tuple(capture.request_headers),
+                body=json.dumps(capture.json_body).encode() if capture.json_body else b"",
+                page_url=requested_url,
+            )
+        )
+    return summarise(collector.candidates())
+
+
 def extract_candidates(
     captured: Sequence[CapturedResponse],
     target_fields: Sequence[str],
@@ -183,6 +216,9 @@ class BrowserReconReport:
     #: looks identical to a recon that simply found no API.
     navigation_status: int | None = None
     navigation_verdict: str | None = None
+    #: Judged route candidates: verdicts, schema signatures, pagination. Empty
+    #: when the recon did not run.
+    discovery: dict[str, Any] = field(default_factory=dict)
 
     @property
     def conclusive(self) -> bool:
@@ -366,12 +402,18 @@ def browser_recon(
             "real page, so an empty candidate list does NOT mean the site has no JSON API",
         )
     candidates = extract_candidates(captured, target_fields)
+    # The richer discovery view, judged rather than merely ranked: verdicts,
+    # schema signatures, GraphQL operations and pagination hints. The simpler
+    # ranking above is kept because it is what the existing draft-profile path
+    # consumes; this adds the judgement rather than replacing the ranking.
+    discovery = _discover(captured, requested_url=url, target_fields=target_fields)
     return BrowserReconReport(
         schema=BROWSER_RECON_SCHEMA,
         requested_url=url,
         executed=True,
         skip_reason=None,
         captured_count=len(captured),
+        discovery=discovery,
         candidates=tuple(candidate.to_dict() for candidate in candidates),
         notes=notes,
         navigation_status=nav_status,
