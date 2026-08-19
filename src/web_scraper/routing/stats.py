@@ -49,11 +49,15 @@ NEUTRAL_VERDICTS = frozenset(
 EWMA_ALPHA = 0.25
 
 
-def wilson_lower_bound(successes: int, attempts: int, *, z: float = 1.96) -> float:
+def wilson_lower_bound(successes: float, attempts: float, *, z: float = 1.96) -> float:
     """Lower bound of the 95% confidence interval for a success rate.
 
     Answers "how good is this route, pessimistically?" so that one lucky success
     out of one attempt does not outrank a route with 200 successes out of 205.
+
+    Counts are floats rather than ints because callers may weight observations
+    by age (see ``ProviderStrategyStats.decayed_confidence_bound``); the formula
+    is continuous and behaves correctly on fractional counts.
     """
 
     if attempts <= 0:

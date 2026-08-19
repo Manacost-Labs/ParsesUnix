@@ -297,3 +297,162 @@ class ExplainabilityTests(RouterCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CanonicalMoneyTests(RouterCase):
+    """Ranking across vendors whose units are not the same thing."""
+
+    def router_with_pricing(self, providers, book, **kw):
+        kw.setdefault("_rng", lambda: 1.0)
+        return MultiProviderRouter(providers=providers, stats=self.stats, pricing=book, **kw)
+
+    def book(self, **rates):
+        from web_scraper.providers.pricing import (
+            PricingBook,
+            PricingSnapshot,
+            StrategyRate,
+        )
+
+        snapshots = tuple(
+            PricingSnapshot(
+                provider=provider,
+                native_unit=unit,
+                pricing_source="test",
+                docs_verified_at="2026-08-19",
+                effective_at="2026-08-19",
+                rates={sid: StrategyRate(Decimal(str(native)), Decimal(str(usd)))},
+            )
+            for provider, (sid, unit, native, usd) in rates.items()
+        )
+        return PricingBook(snapshots)
+
+    def test_equal_native_cost_can_mean_very_different_money(self) -> None:
+        # Both charge "1 unit". One unit costs 10x the other. Ranking in native
+        # units would call these equal and pick by tie-break.
+        cheap = FakeProvider("cheap", (strategy("normal", "1"),))
+        dear = FakeProvider("dear", (strategy("normal", "1"),))
+        self.observe("cheap", "normal", ok=40, fail=0)
+        self.observe("dear", "normal", ok=40, fail=0)
+
+        book = self.book(
+            cheap=("normal", "credits", "1", "0.001"),
+            dear=("normal", "requests", "1", "0.010"),
+        )
+        decision = self.router_with_pricing([cheap, dear], book).choose(
+            domain=DOMAIN, url_class=URL_CLASS, verdict=Verdict.BLOCKED
+        )
+        self.assertEqual(decision.provider, "cheap")
+        self.assertEqual(decision.estimated_usd, Decimal("0.001000"))
+
+    def test_a_higher_native_price_can_be_the_cheaper_choice(self) -> None:
+        # 10 credits at $0.0001 is cheaper than 1 request at $0.01.
+        many_cheap = FakeProvider("credits_vendor", (strategy("normal", "10"),))
+        few_dear = FakeProvider("request_vendor", (strategy("normal", "1"),))
+        self.observe("credits_vendor", "normal", ok=40, fail=0)
+        self.observe("request_vendor", "normal", ok=40, fail=0)
+
+        book = self.book(
+            credits_vendor=("normal", "credits", "10", "0.0001"),
+            request_vendor=("normal", "requests", "1", "0.01"),
+        )
+        decision = self.router_with_pricing([many_cheap, few_dear], book).choose(
+            domain=DOMAIN, url_class=URL_CLASS, verdict=Verdict.BLOCKED
+        )
+        self.assertEqual(decision.provider, "credits_vendor", "$0.001 beats $0.01")
+
+    def test_an_unpriced_strategy_never_wins_by_default(self) -> None:
+        # "We do not know what this costs" must not sort as free.
+        priced = FakeProvider("priced", (strategy("normal", "5"),))
+        unpriced = FakeProvider("unpriced", (strategy("normal", "1"),))
+        self.observe("priced", "normal", ok=40, fail=0)
+        self.observe("unpriced", "normal", ok=40, fail=0)
+
+        book = self.book(priced=("normal", "credits", "5", "0.001"))
+        decision = self.router_with_pricing([priced, unpriced], book).choose(
+            domain=DOMAIN, url_class=URL_CLASS, verdict=Verdict.BLOCKED
+        )
+        self.assertEqual(decision.provider, "priced")
+        unpriced_candidate = next(c for c in decision.candidates if c.provider == "unpriced")
+        self.assertIsNone(unpriced_candidate.expected_usd)
+
+    def test_money_is_divided_by_how_often_the_strategy_works(self) -> None:
+        vendor = FakeProvider("v", (strategy("normal", "1"),))
+        self.observe("v", "normal", ok=90, fail=10)
+        book = self.book(v=("normal", "credits", "1", "0.001"))
+        decision = self.router_with_pricing([vendor], book).choose(
+            domain=DOMAIN, url_class=URL_CLASS, verdict=Verdict.BLOCKED
+        )
+        # $0.001 list / 0.9 success = $0.001111 per usable result.
+        self.assertEqual(decision.estimated_usd, Decimal("0.001111"))
+
+
+class EvidenceDecayTests(RouterCase):
+    """A perfect record from a year ago is not a perfect record."""
+
+    def stats_for(self, provider, sid):
+        return self.stats.get(
+            ProviderStrategyKey(
+                provider=provider, strategy_id=sid, domain=DOMAIN, url_class=URL_CLASS
+            )
+        )
+
+    def test_aged_evidence_loses_confidence_but_keeps_its_rate(self) -> None:
+        self.observe("v", "normal", ok=40, fail=0)
+        record = self.stats_for("v", "normal")
+        assert record is not None
+        fresh_bound = record.confidence_bound
+
+        import time
+
+        a_year_later = time.time() + 365 * 86400
+        aged_bound = record.decayed_confidence_bound(now=a_year_later, half_life_days=30)
+
+        self.assertLess(aged_bound, fresh_bound, "a year of silence is not free")
+        self.assertEqual(record.success_rate, 1.0, "we still believe it worked")
+
+    def test_recent_evidence_is_not_discounted(self) -> None:
+        self.observe("v", "normal", ok=40, fail=0)
+        record = self.stats_for("v", "normal")
+        assert record is not None
+        import time
+
+        self.assertAlmostEqual(
+            record.decay_factor(now=time.time(), half_life_days=30), 1.0, places=2
+        )
+
+    def test_one_half_life_halves_the_weight(self) -> None:
+        self.observe("v", "normal", ok=10, fail=0)
+        record = self.stats_for("v", "normal")
+        assert record is not None
+        import time
+
+        factor = record.decay_factor(now=time.time() + 30 * 86400, half_life_days=30)
+        self.assertAlmostEqual(factor, 0.5, places=2)
+
+    def test_a_strategy_with_no_history_is_not_discounted(self) -> None:
+        from web_scraper.providers.stats import ProviderStrategyStats
+
+        empty = ProviderStrategyStats(
+            key=ProviderStrategyKey(
+                provider="v", strategy_id="s", domain=DOMAIN, url_class=URL_CLASS
+            )
+        )
+        self.assertEqual(empty.decay_factor(now=1e12), 1.0, "nothing to age")
+
+    def test_stale_evidence_can_drop_a_strategy_below_the_bar(self) -> None:
+        # The point of the whole mechanism: a site has had a year to change.
+        import time
+
+        self.observe("stale", "normal", ok=12, fail=0)
+        vendor = FakeProvider("stale", (strategy("normal", "1"),))
+
+        a_year_later = time.time() + 365 * 86400
+        router = MultiProviderRouter(
+            providers=[vendor],
+            stats=self.stats,
+            clock=lambda: a_year_later,
+            _rng=lambda: 1.0,
+        )
+        decision = router.choose(domain=DOMAIN, url_class=URL_CLASS, verdict=Verdict.BLOCKED)
+        self.assertFalse(decision.chosen, "year-old proof is not proof today")
+        self.assertIn("evidence", decision.candidates[0].reason)

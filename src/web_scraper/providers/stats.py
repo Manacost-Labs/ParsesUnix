@@ -40,6 +40,13 @@ from web_scraper.routing.stats import wilson_lower_bound
 #: Smoothing for the reactive success signal. Matches the free route stats.
 EWMA_ALPHA = 0.3
 
+#: Evidence half-life. A strategy that worked perfectly a year ago and has not
+#: been tried since is not as trustworthy as one that worked yesterday: the site
+#: has had a year to change. Observations lose half their weight over this
+#: period, so an aged record drifts back toward "unproven" rather than staying
+#: confidently good forever.
+DEFAULT_EVIDENCE_HALF_LIFE_DAYS = 30.0
+
 #: Verdicts about the TARGET, not about the strategy. See the module docstring.
 NEUTRAL_VERDICTS = frozenset(
     {
@@ -106,6 +113,40 @@ class ProviderStrategyStats:
         """Wilson lower bound of validated success. The safety gate."""
 
         return wilson_lower_bound(self.validated_successes, self.scored_attempts)
+
+    def age_days(self, *, now: float) -> float | None:
+        """How long since this strategy last told us anything here."""
+
+        stamps = [s for s in (self.last_success, self.last_failure) if s is not None]
+        if not stamps:
+            return None
+        return max(0.0, (now - max(stamps)) / 86400.0)
+
+    def decay_factor(
+        self, *, now: float, half_life_days: float = DEFAULT_EVIDENCE_HALF_LIFE_DAYS
+    ) -> float:
+        """Weight this evidence deserves today, in (0, 1]."""
+
+        age = self.age_days(now=now)
+        if age is None or half_life_days <= 0:
+            return 1.0
+        return float(0.5 ** (age / half_life_days))
+
+    def decayed_confidence_bound(
+        self, *, now: float, half_life_days: float = DEFAULT_EVIDENCE_HALF_LIFE_DAYS
+    ) -> float:
+        """The safety gate, with aged evidence counting for less.
+
+        Both the successes and the trials are scaled by the same factor, so the
+        observed *rate* is untouched while the *confidence* falls — which is
+        exactly the right shape: we still believe it worked, we are just less
+        sure it still would.
+        """
+
+        factor = self.decay_factor(now=now, half_life_days=half_life_days)
+        if factor >= 1.0:
+            return self.confidence_bound
+        return wilson_lower_bound(self.validated_successes * factor, self.scored_attempts * factor)
 
     @property
     def success_rate(self) -> float | None:

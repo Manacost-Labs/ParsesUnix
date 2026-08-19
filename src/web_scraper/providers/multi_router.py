@@ -39,6 +39,7 @@ from typing import Any
 from web_scraper.contracts import Verdict
 from web_scraper.providers.base import Provider, ProviderStrategy
 from web_scraper.providers.breaker import ProviderBreakers
+from web_scraper.providers.pricing import PricingBook
 from web_scraper.providers.router import (
     DEFAULT_MIN_OBSERVATIONS,
     DEFAULT_MINIMUM_CONFIDENCE_BOUND,
@@ -47,6 +48,7 @@ from web_scraper.providers.router import (
     _strategy_is_appropriate,
 )
 from web_scraper.providers.stats import (
+    DEFAULT_EVIDENCE_HALF_LIFE_DAYS,
     ProviderStatsStore,
     ProviderStrategyKey,
     ProviderStrategyStats,
@@ -77,9 +79,16 @@ class Candidate:
     stats: ProviderStrategyStats | None
     eligible: bool
     reason: str
+    #: Expected spend per VALID result, in the provider's native unit.
     expected_cost: Decimal
     confidence: float
     exploring: bool = False
+    #: The same figure in canonical money. ``None`` when no tariff covers this
+    #: strategy — which is reported rather than defaulted to zero, because an
+    #: unpriced option would otherwise sort as the cheapest thing available.
+    expected_usd: Decimal | None = None
+    #: Weight this strategy's history still carries, after ageing.
+    evidence_weight: float = 1.0
 
     @property
     def ref(self) -> str:
@@ -93,6 +102,10 @@ class Candidate:
             "nominal_cost": str(self.strategy.nominal_cost),
             "reservation_cost": str(self.strategy.worst_case_cost),
             "expected_cost_per_valid_result": str(self.expected_cost),
+            "expected_usd_per_valid_result": (
+                None if self.expected_usd is None else str(self.expected_usd)
+            ),
+            "evidence_weight": round(self.evidence_weight, 4),
             "confidence_bound": round(self.confidence, 4),
             "eligible": self.eligible,
             "exploring": self.exploring,
@@ -108,6 +121,7 @@ class MultiProviderDecision:
     provider: str | None
     strategy_id: str | None
     estimated_cost: Decimal
+    estimated_usd: Decimal | None
     reservation_cost: Decimal
     minimum_confidence_bound: float
     escalation_verdict: str | None
@@ -128,13 +142,13 @@ class MultiProviderDecision:
         lines = [
             f"escalation verdict: {self.escalation_verdict or '-'}",
             f"minimum confidence bound: {self.minimum_confidence_bound:.3f}",
-            "candidates, ranked by expected cost per valid result:",
+            "candidates, ranked by expected USD per valid result:",
         ]
         for candidate in self.candidates:
             mark = "->" if candidate.ref == self.ref else "  "
             lines.append(
-                f"{mark} {candidate.ref:<28} list {candidate.strategy.nominal_cost:>4}  "
-                f"expected {candidate.expected_cost:>8}  "
+                f"{mark} {candidate.ref:<28} "
+                f"${candidate.expected_usd if candidate.expected_usd is not None else '?':>10}/result  "
                 f"confidence {candidate.confidence:.3f}  {candidate.reason}"
             )
         if self.shadow_probe:
@@ -151,6 +165,7 @@ class MultiProviderDecision:
             "strategy": self.strategy_id,
             "ref": self.ref,
             "estimated_cost": str(self.estimated_cost),
+            "estimated_usd": None if self.estimated_usd is None else str(self.estimated_usd),
             "reservation_cost": str(self.reservation_cost),
             "minimum_confidence_bound": self.minimum_confidence_bound,
             "escalation_verdict": self.escalation_verdict,
@@ -172,6 +187,10 @@ class MultiProviderRouter:
     shadow_probe_rate: float = DEFAULT_SHADOW_PROBE_RATE
     max_exploration_calls: int = DEFAULT_MAX_EXPLORATION_CALLS
     max_exploration_credits: Decimal = DEFAULT_MAX_EXPLORATION_CREDITS
+    pricing: PricingBook = field(default_factory=PricingBook)
+    #: Evidence older than this loses half its weight. See ProviderStrategyStats.
+    evidence_half_life_days: float = DEFAULT_EVIDENCE_HALF_LIFE_DAYS
+    clock: Any = field(default=None, repr=False)
     _rng: Any = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
@@ -183,6 +202,10 @@ class MultiProviderRouter:
             import random
 
             self._rng = random.random
+        if self.clock is None:
+            import time
+
+            self.clock = time.time
 
     # -- assessment --------------------------------------------------------
 
@@ -201,7 +224,16 @@ class MultiProviderRouter:
                 candidates.append(self._judge(provider.name, strategy, domain, url_class, verdict))
         # Ineligible options are kept and reported: an operator asking why a URL
         # was not resolved needs to see what was rejected and on what grounds.
-        candidates.sort(key=lambda c: (not c.eligible, c.expected_cost, c.strategy.nominal_cost))
+        # Ranked in canonical money. An unpriced strategy sorts LAST among the
+        # eligible rather than first: "we do not know what this costs" must never
+        # win a cost comparison by default.
+        candidates.sort(
+            key=lambda c: (
+                not c.eligible,
+                c.expected_usd if c.expected_usd is not None else Decimal("999999"),
+                c.expected_cost,
+            )
+        )
         return candidates
 
     def _judge(
@@ -223,6 +255,7 @@ class MultiProviderRouter:
                 reason=_inappropriate_reason(strategy, verdict),
                 expected_cost=strategy.nominal_cost,
                 confidence=0.0,
+                expected_usd=self.pricing.expected_usd(provider, strategy.id),
             )
 
         # 2. Health. A tripped breaker is not a candidate at any price.
@@ -235,6 +268,7 @@ class MultiProviderRouter:
                 reason="circuit breaker open",
                 expected_cost=strategy.nominal_cost,
                 confidence=0.0,
+                expected_usd=self.pricing.expected_usd(provider, strategy.id),
             )
 
         stats = (
@@ -267,6 +301,7 @@ class MultiProviderRouter:
                     ),
                     expected_cost=strategy.nominal_cost,
                     confidence=0.0,
+                    expected_usd=self.pricing.expected_usd(provider, strategy.id),
                 )
             return Candidate(
                 provider=provider,
@@ -279,15 +314,32 @@ class MultiProviderRouter:
                 expected_cost=strategy.nominal_cost,
                 confidence=0.0,
                 exploring=True,
+                expected_usd=self.pricing.expected_usd(provider, strategy.id),
             )
 
-        # 4. Evidence. The bound gates; the rate prices.
-        confidence = stats.confidence_bound if stats else 0.0
+        # 4. Evidence. The bound gates; the rate prices; age discounts both.
+        now = float(self.clock())
+        weight = (
+            stats.decay_factor(now=now, half_life_days=self.evidence_half_life_days)
+            if stats
+            else 1.0
+        )
+        confidence = (
+            stats.decayed_confidence_bound(now=now, half_life_days=self.evidence_half_life_days)
+            if stats
+            else 0.0
+        )
         expected = _expected_cost(strategy, stats)
+        expected_usd = self._expected_usd(provider, strategy, stats)
         meets = confidence >= self.minimum_confidence_bound
         detail = f"{stats.validated_successes}/{stats.scored_attempts} validated" if stats else ""
         if stats is not None and not stats.cost_is_complete:
             detail += f", {stats.unknown_cost_calls} calls with unattributed cost"
+        if weight < 0.75:
+            age = stats.age_days(now=now) if stats else None
+            detail += f", evidence {int(weight * 100)}% weight"
+            if age is not None:
+                detail += f" (last seen {age:.0f}d ago)"
         return Candidate(
             provider=provider,
             strategy=strategy,
@@ -301,7 +353,25 @@ class MultiProviderRouter:
             ),
             expected_cost=expected,
             confidence=confidence,
+            expected_usd=expected_usd,
+            evidence_weight=weight,
         )
+
+    def _expected_usd(
+        self,
+        provider: str,
+        strategy: ProviderStrategy,
+        stats: ProviderStrategyStats | None,
+    ) -> Decimal | None:
+        """List price in money, divided by how often it actually works."""
+
+        list_usd = self.pricing.expected_usd(provider, strategy.id)
+        if list_usd is None:
+            return None
+        if stats is None or stats.success_rate is None:
+            return list_usd
+        rate = max(stats.success_rate, _MIN_RATE)
+        return (list_usd / Decimal(str(rate))).quantize(Decimal("0.000001"))
 
     # -- choice ------------------------------------------------------------
 
@@ -337,6 +407,7 @@ class MultiProviderRouter:
             provider=chosen.provider if chosen else None,
             strategy_id=chosen.strategy.id if chosen else None,
             estimated_cost=chosen.expected_cost if chosen else Decimal("0"),
+            estimated_usd=chosen.expected_usd if chosen else None,
             reservation_cost=chosen.strategy.worst_case_cost if chosen else Decimal("0"),
             minimum_confidence_bound=self.minimum_confidence_bound,
             escalation_verdict=verdict.value if verdict else None,
