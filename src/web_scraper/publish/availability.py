@@ -41,6 +41,9 @@ class RecordAvailability:
     last_success_at: float | None
     fresh_failure_verdict: str | None
     data: Mapping[str, Any] | None
+    #: Which class's freshness window judged this record. Reported so an
+    #: operator can see WHY a record was called stale, not just that it was.
+    url_class: str | None = None
 
     @property
     def is_usable(self) -> bool:
@@ -55,6 +58,7 @@ class RecordAvailability:
                 round(self.age_seconds, 1) if self.age_seconds is not None else None
             ),
             "last_success_at": self.last_success_at,
+            "url_class": self.url_class,
             "fresh_failure_verdict": self.fresh_failure_verdict,
             "data": dict(self.data) if self.data is not None else None,
         }
@@ -136,23 +140,37 @@ def build_availability(
     now: float,
     max_age_seconds: float,
     verdicts_by_key: Mapping[str, str] | None = None,
+    max_age_by_url_class: Mapping[str, float] | None = None,
+    url_class_by_key: Mapping[str, str] | None = None,
 ) -> list[RecordAvailability]:
     """Attach a status to every clean-dataset row.
 
     ``rows`` come from :meth:`DatasetStore.clean_rows_with_meta`; ``verdicts_by_key``
     maps a record's natural key to the verdict of the most recent attempt.
+
+    Each record is judged against **its own url_class's** freshness window when
+    ``max_age_by_url_class`` is supplied. A single global window is wrong in both
+    directions: a site with hourly news and monthly guides judged at one hour
+    reports every guide as stale, and judged at a month reports day-old news as
+    current. ``max_age_seconds`` remains the fallback for records whose class is
+    unknown, so a missing mapping degrades to the old behaviour rather than to no
+    classification at all.
     """
 
     verdicts = verdicts_by_key or {}
+    windows = max_age_by_url_class or {}
+    classes = url_class_by_key or {}
     out: list[RecordAvailability] = []
     for row in rows:
         key = str(row.get("natural_key", ""))
         last_verdict = verdicts.get(key)
         payload = row.get("data")
+        url_class = classes.get(key) or str(row.get("url_class") or "")
+        window = windows.get(url_class, max_age_seconds)
         status, age = classify_record(
             updated_at=row.get("updated_at"),
             now=now,
-            max_age_seconds=max_age_seconds,
+            max_age_seconds=window,
             last_verdict=last_verdict,
             has_data=payload is not None,
         )
@@ -167,9 +185,28 @@ def build_availability(
                     last_verdict if status is DataStatus.STALE_LKG and last_verdict else None
                 ),
                 data=payload,
+                url_class=url_class or None,
             )
         )
     return out
+
+
+def summarize_by_url_class(
+    records: Sequence[RecordAvailability],
+) -> dict[str, dict[str, Any]]:
+    """Availability per class, because one global number hides the failure.
+
+    A dataset that is 95% fresh overall can be 100% fresh on the large, easy
+    class and 0% fresh on the small, important one. The global figure would
+    still read as healthy.
+    """
+
+    grouped: dict[str, list[RecordAvailability]] = {}
+    for record in records:
+        grouped.setdefault(record.url_class or "unknown", []).append(record)
+    return {
+        name: summarize_availability(group).to_dict() for name, group in sorted(grouped.items())
+    }
 
 
 def summarize_availability(records: Sequence[RecordAvailability]) -> AvailabilitySLO:

@@ -30,7 +30,12 @@ from web_scraper.observability.accounting import build_accounting
 from web_scraper.observability.metrics import build_report
 from web_scraper.profiles import load_profile
 from web_scraper.profiles.model import SiteProfile, UrlClass
-from web_scraper.publish import DatasetStore, build_availability, summarize_availability
+from web_scraper.publish import (
+    DatasetStore,
+    build_availability,
+    summarize_availability,
+)
+from web_scraper.publish.availability import summarize_by_url_class
 from web_scraper.queue import QueueStore, normalize_url
 from web_scraper.queue.store import QueuedUrl
 from web_scraper.routing import RouteStatsStore
@@ -380,27 +385,45 @@ class Runner:
     # -- finalize ----------------------------------------------------------
 
     def _availability_slo(self) -> dict[str, Any]:
-        """How much of the published dataset a consumer may treat as current."""
+        """How much of the published dataset a consumer may treat as current.
 
-        max_age_hours = min(
-            (
-                float(cls.freshness.get("max_age_hours", 24))
-                for cls in self.profile.url_classes.values()
-            ),
-            default=24.0,
-        )
-        verdicts = {
-            row.natural_key: row.verdict
-            for row in self.queue.all_rows()
-            if row.natural_key and row.verdict
+        Every record is judged against ITS OWN class's freshness window. The
+        previous global ``min()`` across classes meant a site with hourly news
+        and monthly guides judged every guide at the news window and reported
+        perfectly current guides as stale — a correctness bug in the direction
+        that matters, since a consumer trusting the report would re-fetch data
+        that was fine.
+        """
+
+        windows = {
+            name: float(cls.freshness.get("max_age_hours", 24)) * 3600.0
+            for name, cls in self.profile.url_classes.items()
         }
+        fallback = min(windows.values(), default=24.0 * 3600.0)
+
+        verdicts: dict[str, str] = {}
+        classes: dict[str, str] = {}
+        for row in self.queue.all_rows():
+            if not row.natural_key:
+                continue
+            if row.verdict:
+                verdicts[row.natural_key] = row.verdict
+            if row.url_class:
+                classes[row.natural_key] = row.url_class
+
         records = build_availability(
             self.dataset.clean_rows_with_meta(),
             now=self._wall_clock(),
-            max_age_seconds=max_age_hours * 3600.0,
+            max_age_seconds=fallback,
             verdicts_by_key=verdicts,
+            max_age_by_url_class=windows,
+            url_class_by_key=classes,
         )
-        return summarize_availability(records).to_dict()
+        summary = summarize_availability(records).to_dict()
+        # A global figure can read as healthy while one small, important class
+        # is entirely stale. Both are reported.
+        summary["by_url_class"] = summarize_by_url_class(records)
+        return summary
 
     def _promote(self) -> dict[str, Any] | None:
         required = sorted(
