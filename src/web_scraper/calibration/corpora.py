@@ -90,16 +90,94 @@ EXAMPLE_CORPUS = Corpus(
             ),
         ),
         CorpusTarget(
+            url="https://www.scrapethissite.com/pages/frames/",
+            domain="www.scrapethissite.com",
+            url_class="page",
+            kind=TargetKind.SSR_HTML,
+            expected_content_kind=ContentKind.HTML,
+            min_body_bytes=4000,
+            canaries=("Frames",),
+            critical_fields=("title",),
+            notes="server-rendered, 10.3 KB measured",
+        ),
+        CorpusTarget(
+            url="https://www.scrapethissite.com/pages/ajax-javascript/",
+            domain="www.scrapethissite.com",
+            url_class="page",
+            kind=TargetKind.SSR_HTML,
+            expected_content_kind=ContentKind.HTML,
+            min_body_bytes=4000,
+            canaries=("Oscar",),
+            critical_fields=("title",),
+            notes="the HTML page whose own AJAX endpoint is also in this corpus",
+        ),
+        CorpusTarget(
+            url="https://www.scrapethissite.com/pages/forms/?page_num=3",
+            domain="www.scrapethissite.com",
+            url_class="listing",
+            kind=TargetKind.LISTING,
+            expected_content_kind=ContentKind.HTML,
+            min_body_bytes=20000,
+            canaries=("hockey",),
+            critical_fields=("title",),
+            notes="page 3 of the same listing, 50 KB measured",
+        ),
+        CorpusTarget(
+            url="https://www.scrapethissite.com/pages/forms/?page_num=4",
+            domain="www.scrapethissite.com",
+            url_class="listing",
+            kind=TargetKind.LISTING,
+            expected_content_kind=ContentKind.HTML,
+            min_body_bytes=20000,
+            canaries=("hockey",),
+            critical_fields=("title",),
+            notes="page 4 of the same listing, 50 KB measured",
+        ),
+        CorpusTarget(
+            url="https://www.scrapethissite.com/pages/ajax-javascript/?ajax=true&year=2012",
+            domain="www.scrapethissite.com",
+            url_class="rankings",
+            kind=TargetKind.JSON_ENDPOINT,
+            expected_content_kind=ContentKind.JSON,
+            min_body_bytes=500,
+            required_json_paths=("0.title", "0.year"),
+            notes="1 430 B of application/json measured",
+        ),
+        CorpusTarget(
+            url="https://www.scrapethissite.com/pages/ajax-javascript/?ajax=true&year=2010",
+            domain="www.scrapethissite.com",
+            url_class="rankings",
+            kind=TargetKind.JSON_ENDPOINT,
+            expected_content_kind=ContentKind.JSON,
+            min_body_bytes=500,
+            required_json_paths=("0.title", "0.year"),
+            notes="1 270 B of application/json measured",
+        ),
+        CorpusTarget(
+            url="https://www.scrapethissite.com/pages/no-such-page-here",
+            domain="www.scrapethissite.com",
+            url_class="page",
+            kind=TargetKind.DEAD_URL,
+            expected_content_kind=ContentKind.HTML,
+            expected_target_status=404,
+            notes="a second dead URL: one provider misreporting once is a fluke",
+        ),
+        CorpusTarget(
             url="https://wowmeta.com/",
             domain="wowmeta.com",
             url_class="home",
             kind=TargetKind.CSR_SHELL,
             expected_content_kind=ContentKind.HTML,
-            # The shell measures 2 035 bytes. Anything near that is the shell,
-            # not the page, whatever status came with it — so the size IS the
-            # test for whether rendering happened.
+            # Both figures are measured. The shell is 2 035 bytes and contains
+            # no "Tier List" anywhere; a local Chromium render produced 51 797
+            # bytes and does. So the canary is the test for whether rendering
+            # happened, and the size is a second opinion on it.
             min_body_bytes=10000,
-            notes="client-rendered; unrendered shell measured at 2 035 bytes",
+            canaries=("Tier List",),
+            notes=(
+                "client-rendered. Shell 2 035 bytes without the canary; local "
+                "Chromium render 51 797 bytes with it"
+            ),
         ),
         CorpusTarget(
             url="https://hsreplay.net/",

@@ -50,12 +50,22 @@ DEFAULT_STATE_DIR = Path(".calibration")
 DEFAULT_ARTIFACTS = Path("artifacts")
 
 
-def _providers(names: Sequence[str]) -> list[Provider]:
-    """The fleet this machine can actually call, filtered to what was asked."""
+def _providers(names: Sequence[str], *, capture: bool = True) -> list[Provider]:
+    """The fleet this machine can actually call, filtered to what was asked.
 
+    Built by the same function the run and the estimate use, with one
+    substitution: ZenRows is rebuilt with network capture on, because its
+    discovery data rides along with a render it was going to do anyway. Asking
+    for it costs no extra call, and not asking is how a session reports "no
+    discovery" from a provider that had it all along.
+    """
+
+    from web_scraper.providers.zenrows import ZenRowsProvider
     from web_scraper.run.estimate_cli import configured_providers
 
     fleet = configured_providers()
+    if capture:
+        fleet = [ZenRowsProvider(capture_network=True) if p.name == "zenrows" else p for p in fleet]
     if not names:
         return fleet
     wanted = set(names)
@@ -147,7 +157,7 @@ def _run_providers(args: argparse.Namespace) -> int:
     # No --corpus means the bundled one: the command has to be runnable, and
     # safe, without an operator first authoring a manifest.
     corpus: Corpus = load_corpus(args.corpus) if args.corpus else EXAMPLE_CORPUS
-    providers = _providers(args.provider)
+    providers = _providers(args.provider, capture=not args.no_capture)
     if not providers:
         print(
             "no provider is configured on this machine — set the vendors' API keys "
@@ -230,6 +240,39 @@ def _run_providers(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_report(args: argparse.Namespace) -> int:
+    """Re-read a session from disk and print it again, calling nothing.
+
+    Exists because the reading of a measurement changes more often than the
+    measurement does: a better ranking, a clearer table. Re-running the network
+    to get those would quietly answer a different question with the new words.
+    """
+
+    from web_scraper.calibration.harness import outcome_from_dict
+
+    store = CalibrationStore(args.state_dir)
+    outcomes = [outcome_from_dict(row) for row in store.attempts(args.session)]
+    if not outcomes:
+        print(f"no attempts recorded for session {args.session!r}", file=sys.stderr)
+        return 2
+    corpus = load_corpus(args.corpus) if args.corpus else EXAMPLE_CORPUS
+    report = CalibrationReport(
+        session=args.session,
+        corpus=corpus,
+        outcomes=outcomes,
+        pricing=PricingBook(),
+        caps={"note": "re-rendered from stored attempts; caps are those of the original run"},
+        fairness={"re_rendered": True},
+        live=True,
+        minimum_confidence=args.min_confidence,
+        notes=tuple(args.note or ()),
+    )
+    json_path, md_path = report.write(args.artifacts)
+    print(report.describe())
+    print(f"\nwrote {json_path}\nwrote {md_path}")
+    return 0
+
+
 def _run_promote(args: argparse.Namespace) -> int:
     calibration = CalibrationStore(args.state_dir).stats
     production = ProviderStatsStore(args.production_stats)
@@ -287,6 +330,15 @@ def build_parser() -> argparse.ArgumentParser:
     providers.add_argument("--recommend", action="append", default=[])
     providers.add_argument("--note", action="append", default=[])
     providers.set_defaults(func=_run_providers)
+
+    render = sub.add_parser("report", help="re-render a stored session without calling anything")
+    render.add_argument("--state-dir", default=str(DEFAULT_STATE_DIR))
+    render.add_argument("--session", required=True)
+    render.add_argument("--artifacts", default=str(DEFAULT_ARTIFACTS))
+    render.add_argument("--corpus", default=None)
+    render.add_argument("--min-confidence", type=float, default=0.7)
+    render.add_argument("--note", action="append", default=[])
+    render.set_defaults(func=_run_report)
 
     promote = sub.add_parser("promote", help="review, and only then import, calibration evidence")
     promote.add_argument("--state-dir", default=str(DEFAULT_STATE_DIR))

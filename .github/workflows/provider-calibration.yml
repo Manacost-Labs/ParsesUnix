@@ -1,0 +1,84 @@
+# Live provider calibration. Manual and scheduled only — never on a PR.
+#
+# Every run of this workflow spends real money on five vendor accounts, so it is
+# not a gate and must never become one. PR CI proves the harness is correct with
+# scripted transports; this proves what the vendors actually do, on a cadence a
+# human chooses.
+#
+# The default is still plan-only. `--live` happens when someone types it.
+name: Provider calibration
+
+on:
+  workflow_dispatch:
+    inputs:
+      live:
+        description: "Actually call the providers (spends money)"
+        type: boolean
+        default: false
+      max_usd:
+        description: "Hard ceiling for the whole session, USD"
+        default: "0.50"
+  schedule:
+    # Monthly. Tariffs and anti-bot behaviour drift; a calibration older than a
+    # billing cycle is a description of a fleet that may no longer exist.
+    - cron: "0 4 1 * *"
+
+concurrency:
+  # Two sessions at once would double the bill and interleave the evidence.
+  group: provider-calibration
+  cancel-in-progress: false
+
+jobs:
+  calibrate:
+    name: calibrate the fleet
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: python -m pip install -e .
+
+      - name: Plan (never spends)
+        run: python -m web_scraper.calibration.cli providers --max-usd "${{ inputs.max_usd || '0.50' }}"
+        env:
+          SCRAPE_DO_TOKEN: ${{ secrets.SCRAPE_DO_TOKEN }}
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          BRIGHTDATA_API_KEY: ${{ secrets.BRIGHTDATA_API_KEY }}
+          BRIGHTDATA_ZONE: ${{ secrets.BRIGHTDATA_ZONE }}
+          ZENROWS_API_KEY: ${{ secrets.ZENROWS_API_KEY }}
+          ZYTE_API_KEY: ${{ secrets.ZYTE_API_KEY }}
+
+      - name: Calibrate
+        if: ${{ inputs.live == true || github.event_name == 'schedule' }}
+        run: |
+          python -m web_scraper.calibration.cli providers --live \
+            --max-usd "${{ inputs.max_usd || '0.50' }}" \
+            --use-breakers --min-confidence 0.5 \
+            --artifacts artifacts
+        env:
+          SCRAPE_DO_TOKEN: ${{ secrets.SCRAPE_DO_TOKEN }}
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          BRIGHTDATA_API_KEY: ${{ secrets.BRIGHTDATA_API_KEY }}
+          BRIGHTDATA_ZONE: ${{ secrets.BRIGHTDATA_ZONE }}
+          ZENROWS_API_KEY: ${{ secrets.ZENROWS_API_KEY }}
+          ZYTE_API_KEY: ${{ secrets.ZYTE_API_KEY }}
+          BRIGHTDATA_CPM_USD: ${{ secrets.BRIGHTDATA_CPM_USD }}
+          ZENROWS_BASE_CPM_USD: ${{ secrets.ZENROWS_BASE_CPM_USD }}
+          ZYTE_HTTP_MAX_USD: ${{ secrets.ZYTE_HTTP_MAX_USD }}
+          ZYTE_BROWSER_MAX_USD: ${{ secrets.ZYTE_BROWSER_MAX_USD }}
+          ZYTE_CAPTURE_MAX_USD: ${{ secrets.ZYTE_CAPTURE_MAX_USD }}
+
+      - name: Keep the artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: provider-calibration
+          path: artifacts/
+          if-no-files-found: ignore
+
+      # Deliberately absent: any step that promotes the evidence. Routing
+      # changes when a person reads the preview and says yes, not when a cron
+      # fires at four in the morning.

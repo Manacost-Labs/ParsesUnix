@@ -307,6 +307,42 @@ class TargetStatusMatrix(unittest.TestCase):
                 )
 
 
+class RedirectHandling(unittest.TestCase):
+    """A redirect is not a verdict about the document that came back."""
+
+    def test_scrape_do_does_not_report_a_redirect_as_the_pages_status(self) -> None:
+        """MEASURED live: the initial-status header is the FIRST hop.
+
+        A rendering call on a page that redirects to itself reported 308 while
+        handing back the finished document. Triage read the 308, called the
+        answer malformed, and the URL then looked worth escalating to something
+        more expensive — paying twice for a page that had already arrived.
+        """
+
+        http = FakeHTTP(
+            status=200,
+            body=PAGE,
+            headers={"scrape.do-initial-status-code": "308", "scrape.do-request-cost": "5"},
+        )
+        response = ScrapeDoProvider(token="t", opener=http).fetch(
+            ProviderRequest(url=URL, strategy_id="render")
+        )
+        self.assertEqual(response.target_status, 200)
+
+    def test_a_real_target_status_is_still_preferred_over_the_envelope(self) -> None:
+        """The fix must not swallow the case the header exists for."""
+
+        http = FakeHTTP(
+            status=200,
+            body=GONE,
+            headers={"scrape.do-initial-status-code": "404", "scrape.do-request-cost": "1"},
+        )
+        response = ScrapeDoProvider(token="t", opener=http).fetch(
+            ProviderRequest(url=URL, strategy_id="normal")
+        )
+        self.assertEqual(response.target_status, 404)
+
+
 class BillingMatrix(unittest.TestCase):
     """An unknown cost is never a zero, in any vendor, on any path."""
 

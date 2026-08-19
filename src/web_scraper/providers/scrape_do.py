@@ -230,6 +230,15 @@ class ScrapeDoProvider:
             )
 
         target_status = _int_or_none(headers.get(HEADER_TARGET_STATUS))
+        if target_status is not None and 300 <= target_status < 400:
+            # MEASURED: the header is the status of the FIRST hop, not the last.
+            # A rendering call on a page that redirects reported 308 while
+            # handing back the final document, and triage read the 308 as a
+            # malformed answer — so a perfectly good page came back PARSE_FAIL
+            # and the URL looked worth escalating to something dearer. A
+            # redirect is by definition not the answer; the envelope status
+            # describes the document we were actually given.
+            target_status = status
         return ProviderResponse(
             provider=self.name,
             strategy_id=request.strategy_id,

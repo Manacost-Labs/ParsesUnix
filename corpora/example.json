@@ -96,16 +96,145 @@
       }
     },
     {
+      "url": "https://www.scrapethissite.com/pages/frames/",
+      "domain": "www.scrapethissite.com",
+      "url_class": "page",
+      "kind": "ssr_html",
+      "notes": "server-rendered, 10.3 KB measured",
+      "expected": {
+        "content_kind": "html",
+        "target_status": 200,
+        "min_body_bytes": 4000,
+        "canaries": [
+          "Frames"
+        ],
+        "json_paths": [],
+        "critical_fields": [
+          "title"
+        ]
+      }
+    },
+    {
+      "url": "https://www.scrapethissite.com/pages/ajax-javascript/",
+      "domain": "www.scrapethissite.com",
+      "url_class": "page",
+      "kind": "ssr_html",
+      "notes": "the HTML page whose own AJAX endpoint is also in this corpus",
+      "expected": {
+        "content_kind": "html",
+        "target_status": 200,
+        "min_body_bytes": 4000,
+        "canaries": [
+          "Oscar"
+        ],
+        "json_paths": [],
+        "critical_fields": [
+          "title"
+        ]
+      }
+    },
+    {
+      "url": "https://www.scrapethissite.com/pages/forms/?page_num=3",
+      "domain": "www.scrapethissite.com",
+      "url_class": "listing",
+      "kind": "listing",
+      "notes": "page 3 of the same listing, 50 KB measured",
+      "expected": {
+        "content_kind": "html",
+        "target_status": 200,
+        "min_body_bytes": 20000,
+        "canaries": [
+          "hockey"
+        ],
+        "json_paths": [],
+        "critical_fields": [
+          "title"
+        ]
+      }
+    },
+    {
+      "url": "https://www.scrapethissite.com/pages/forms/?page_num=4",
+      "domain": "www.scrapethissite.com",
+      "url_class": "listing",
+      "kind": "listing",
+      "notes": "page 4 of the same listing, 50 KB measured",
+      "expected": {
+        "content_kind": "html",
+        "target_status": 200,
+        "min_body_bytes": 20000,
+        "canaries": [
+          "hockey"
+        ],
+        "json_paths": [],
+        "critical_fields": [
+          "title"
+        ]
+      }
+    },
+    {
+      "url": "https://www.scrapethissite.com/pages/ajax-javascript/?ajax=true&year=2012",
+      "domain": "www.scrapethissite.com",
+      "url_class": "rankings",
+      "kind": "json_endpoint",
+      "notes": "1 430 B of application/json measured",
+      "expected": {
+        "content_kind": "json",
+        "target_status": 200,
+        "min_body_bytes": 500,
+        "canaries": [],
+        "json_paths": [
+          "0.title",
+          "0.year"
+        ],
+        "critical_fields": []
+      }
+    },
+    {
+      "url": "https://www.scrapethissite.com/pages/ajax-javascript/?ajax=true&year=2010",
+      "domain": "www.scrapethissite.com",
+      "url_class": "rankings",
+      "kind": "json_endpoint",
+      "notes": "1 270 B of application/json measured",
+      "expected": {
+        "content_kind": "json",
+        "target_status": 200,
+        "min_body_bytes": 500,
+        "canaries": [],
+        "json_paths": [
+          "0.title",
+          "0.year"
+        ],
+        "critical_fields": []
+      }
+    },
+    {
+      "url": "https://www.scrapethissite.com/pages/no-such-page-here",
+      "domain": "www.scrapethissite.com",
+      "url_class": "page",
+      "kind": "dead_url",
+      "notes": "a second dead URL: one provider misreporting once is a fluke",
+      "expected": {
+        "content_kind": "html",
+        "target_status": 404,
+        "min_body_bytes": 500,
+        "canaries": [],
+        "json_paths": [],
+        "critical_fields": []
+      }
+    },
+    {
       "url": "https://wowmeta.com/",
       "domain": "wowmeta.com",
       "url_class": "home",
       "kind": "csr_shell",
-      "notes": "client-rendered; unrendered shell measured at 2 035 bytes",
+      "notes": "client-rendered. Shell 2 035 bytes without the canary; local Chromium render 51 797 bytes with it",
       "expected": {
         "content_kind": "html",
         "target_status": 200,
         "min_body_bytes": 10000,
-        "canaries": [],
+        "canaries": [
+          "Tier List"
+        ],
         "json_paths": [],
         "critical_fields": []
       }

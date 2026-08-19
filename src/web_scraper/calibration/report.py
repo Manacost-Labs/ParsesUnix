@@ -164,6 +164,20 @@ class CalibrationReport:
             "",
         ]
 
+        stopped = dict(self.caps.get("stopped") or {})
+        if stopped or self.caps.get("session_stop"):
+            lines += [
+                "## Cut off by the spend cap",
+                "",
+                "A vendor stopped here has not failed — it ran out of budget. Its "
+                "numbers below cover only the calls it made.",
+                "",
+            ]
+            lines += [f"- `{name}` — {why}" for name, why in sorted(stopped.items())]
+            if self.caps.get("session_stop"):
+                lines.append(f"- **session** — {self.caps['session_stop']}")
+            lines.append("")
+
         if self.corpus.skipped_by_policy:
             lines += ["## Skipped by policy", ""]
             lines += [
@@ -173,9 +187,36 @@ class CalibrationReport:
 
         lines += ["## Strategies", "", _strategy_table(payload["strategies"]), ""]
 
+        lines += [
+            "## Status fidelity",
+            "",
+            "Did the vendor report the status the site actually gives? This is the "
+            "measurement that catches the defect class which cost this project the "
+            "most: a dead URL reported as a success is re-fetched, and re-billed, "
+            "on every run for as long as the crawl exists.",
+            "",
+            _fidelity_table(payload["strategies"]),
+            "",
+        ]
+
         lines += ["## Winner by segment", ""]
         for kind, block in payload["segment_winners"].items():
-            lines.append(f"**{kind}** — {block['winner'] or 'no winner'}: {block['reason']}")
+            if block["winner"]:
+                lines.append(f"**{kind}** — `{block['winner']}`: {block['reason']}")
+                continue
+            leader = block.get("leader")
+            needed = block.get("clean_successes_needed")
+            if leader:
+                cost = block.get("leader_usd_per_validated_result") or "unpriced"
+                lines.append(
+                    f"**{kind}** — no certified winner. Ahead on the evidence so far: "
+                    f"`{leader}` at ${cost}/validated, confidence bound "
+                    f"{block['leader_confidence_bound']:.3f}. Certifying "
+                    f"{self.minimum_confidence:.2f} needs {needed} consecutive validated "
+                    "results on this segment."
+                )
+            else:
+                lines.append(f"**{kind}** — nothing was measured on this segment.")
         lines.append("")
 
         conc = payload["concentration"]
@@ -208,6 +249,30 @@ class CalibrationReport:
         if self.notes:
             lines += ["## Notes", "", *[f"- {n}" for n in self.notes], ""]
         return "\n".join(lines)
+
+
+def _fidelity_table(rows: Sequence[Mapping[str, Any]]) -> str:
+    """One line per vendor: how often its target status was the site's own."""
+
+    by_provider: dict[str, list[int]] = {}
+    for row in rows:
+        if not row["status_checked"]:
+            continue
+        # Counts, not a rate multiplied back out: a percentage reconstructed
+        # into a count is a rounding error waiting to be reported as a fact.
+        correct, checked = by_provider.setdefault(row["provider"], [0, 0])
+        by_provider[row["provider"]] = [
+            correct + row["status_correct"],
+            checked + row["status_checked"],
+        ]
+    if not by_provider:
+        return "_no status was checked_"
+    lines = ["| provider | correct | checked | fidelity |", "|---|---:|---:|---:|"]
+    for provider, (correct, checked) in sorted(
+        by_provider.items(), key=lambda kv: -kv[1][0] / max(kv[1][1], 1)
+    ):
+        lines.append(f"| `{provider}` | {correct} | {checked} | {correct / checked:.1%} |")
+    return "\n".join(lines)
 
 
 def _ordered(metrics: Iterable[Any]) -> list[Any]:

@@ -139,12 +139,40 @@ def _find_access_denied_signature(body: bytes) -> str | None:
 
 
 def _json_path_exists(value: Any, path: str) -> bool:
-    current = value
-    for part in path.split("."):
-        if not isinstance(current, dict) or part not in current:
-            return False
-        current = current[part]
-    return current is not None
+    """Does the profile's path resolve to something in this document?
+
+    Traversal is delegated to :func:`~web_scraper.extract.json_path.walk`, which
+    is the subset Site Profiles are written against. An earlier version walked
+    only dictionaries, so a top-level JSON *array* — the commonest shape a
+    listing endpoint has — could not be validated at all: every required path
+    reported missing and triage returned PARSE_FAIL for a perfectly good
+    payload. Extraction could read those paths the whole time, which is the
+    worst version of the bug: the extractor works and the verdict says the
+    fetch failed.
+
+    A malformed path is a profile bug, and it reads as missing here rather than
+    ending the run; profile validation is where that belongs.
+    """
+
+    from web_scraper.extract.json_path import JsonPathError, walk
+
+    try:
+        return walk(value, path) is not None
+    except JsonPathError:
+        return False
+
+
+def _body_matches(payload: bytes, expected: str) -> bool:
+    """Does the body itself answer to the type the profile asked for?
+
+    Only consulted when the declared type disagrees, so a correctly labelled
+    response never pays for the detection.
+    """
+
+    from web_scraper.extract.content_kind import detect_content_kind
+
+    kind = detect_content_kind(payload, None)
+    return kind.value.lower() in expected or expected in kind.value.lower()
 
 
 def _validate_json(body: bytes, required_paths: Sequence[str]) -> str | None:
@@ -310,10 +338,22 @@ def classify_response(
 
         content_type = normalized_headers.get("content-type", "").lower()
         expected = (selected_rules.expected_content_type or "").lower()
-        if expected and expected not in content_type:
+        if expected and expected not in content_type and not _body_matches(payload, expected):
+            # The header alone was the test until a live provider handed back
+            # 28 KB of perfectly good HTML labelled `text/plain`. Every page
+            # from that vendor failed validation while extraction would have
+            # worked on all of them.
+            #
+            # This module already holds that a body cannot be wrong about
+            # itself — it is why detect_content_kind exists and why it reads the
+            # body before the header. Validation now uses the same authority: a
+            # declared type that disagrees with the content is a vendor's
+            # mislabelling, not a broken document, and the failure below fires
+            # only when the CONTENT is genuinely not what was asked for.
             return TriageResult(
                 Verdict.PARSE_FAIL,
-                f"expected content type containing {expected!r}, got {content_type!r}",
+                f"expected content type containing {expected!r}, got {content_type!r} "
+                f"and the body is not {expected}",
                 status,
                 len(payload),
             )

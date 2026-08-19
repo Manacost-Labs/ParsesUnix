@@ -205,6 +205,7 @@ class StrategyMetrics:
                 None if self.status_fidelity is None else round(self.status_fidelity, 4)
             ),
             "status_checked": self.status_checked,
+            "status_correct": self.status_correct,
             "exact_usd": str(self.exact_usd),
             "provisional_usd": str(self.provisional_usd),
             "unknown_cost_calls": self.unknown_cost_calls,
@@ -316,6 +317,20 @@ def rank(
     return ranked
 
 
+def clean_successes_needed(gate: float, *, limit: int = 200) -> int | None:
+    """How many consecutive validated results would certify ``gate``.
+
+    The most useful sentence a thin sample can produce. "No winner" reads as a
+    broken benchmark; "three successes certify 0.44, and you need eleven for
+    0.80" tells an operator exactly how much more corpus to buy.
+    """
+
+    for n in range(1, limit + 1):
+        if wilson_lower_bound(n, n) >= gate:
+            return n
+    return None
+
+
 def concentration(outcomes: Iterable[AttemptOutcome]) -> dict[str, Any]:
     """How much of the paid traffic one vendor would carry.
 
@@ -399,6 +414,7 @@ def segment_winners(
             records, minimum_confidence=minimum_confidence, min_observations=min_observations
         )
         qualified = [r for r in ordered if r.passes_confidence]
+        leader = ordered[0] if ordered else None
         winners[kind] = {
             "winner": qualified[0].metrics.ref if qualified else None,
             "reason": (
@@ -406,6 +422,17 @@ def segment_winners(
                 if qualified
                 else "no strategy cleared the confidence gate on this segment"
             ),
+            # Named separately from the winner on purpose. The leader is who is
+            # ahead; the winner is who has earned the decision. Collapsing the
+            # two is how a three-sample lead becomes a routing change.
+            "leader": None if leader is None else leader.metrics.ref,
+            "leader_confidence_bound": None if leader is None else leader.metrics.confidence_bound,
+            "leader_usd_per_validated_result": (
+                None
+                if leader is None or leader.metrics.usd_per_validated_result is None
+                else str(leader.metrics.usd_per_validated_result)
+            ),
+            "clean_successes_needed": clean_successes_needed(minimum_confidence),
             "ranked": [r.to_dict() for r in ordered],
         }
     return winners

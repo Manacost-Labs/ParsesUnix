@@ -103,6 +103,92 @@ class TriageTests(unittest.TestCase):
         self.assertEqual(result.verdict, Verdict.SOFT_BLOCK)
 
 
+class JsonPathValidation(unittest.TestCase):
+    """The shape a listing endpoint actually has."""
+
+    def test_a_top_level_array_can_be_validated(self) -> None:
+        """Found by running a real JSON endpoint through five providers.
+
+        All five returned the same 1 570-byte payload and all five were graded
+        PARSE_FAIL, because the validator walked dictionaries only. Extraction
+        could read those very paths the whole time — the extractor worked and
+        the verdict said the fetch had failed.
+        """
+
+        body = b'[{"title": "Spotlight", "year": 2015}]'
+        result = classify_response(
+            status=200,
+            body=body,
+            headers={"Content-Type": "application/json"},
+            rules=ContentRules(
+                min_body_bytes=10,
+                expected_content_type="json",
+                required_json_paths=("0.title", "0.year"),
+            ),
+        )
+        self.assertIs(result.verdict, Verdict.OK, result.reason)
+
+    def test_a_genuinely_missing_path_still_fails(self) -> None:
+        result = classify_response(
+            status=200,
+            body=b'[{"title": "Spotlight"}]',
+            headers={"Content-Type": "application/json"},
+            rules=ContentRules(
+                min_body_bytes=10,
+                expected_content_type="json",
+                required_json_paths=("0.nope",),
+            ),
+        )
+        self.assertIs(result.verdict, Verdict.PARSE_FAIL)
+
+    def test_a_malformed_path_is_reported_not_raised(self) -> None:
+        result = classify_response(
+            status=200,
+            body=b'{"a": 1}',
+            headers={"Content-Type": "application/json"},
+            rules=ContentRules(
+                min_body_bytes=1, expected_content_type="json", required_json_paths=("",)
+            ),
+        )
+        self.assertIs(result.verdict, Verdict.PARSE_FAIL)
+
+
+class MislabelledContentType(unittest.TestCase):
+    """A body cannot be wrong about itself; a Content-Type header often is."""
+
+    def test_html_declared_as_text_plain_still_validates(self) -> None:
+        """Measured: a live provider returned 28 KB of HTML as text/plain.
+
+        Every page from that vendor failed validation while extraction would
+        have worked on all of them, which is the expensive kind of wrong: the
+        run pays, gets the document, and throws it away.
+        """
+
+        body = b"<html><body>" + b"<p>hi</p>" * 300 + b"</body></html>"
+        result = classify_response(
+            status=200,
+            body=body,
+            headers={"Content-Type": "text/plain; charset=utf-8"},
+            rules=ContentRules(min_body_bytes=100, expected_content_type="html"),
+        )
+        self.assertIs(result.verdict, Verdict.OK, result.reason)
+
+    def test_a_body_that_is_genuinely_the_wrong_type_still_fails(self) -> None:
+        """The check must still fire when the CONTENT is wrong."""
+
+        import json as _json
+
+        body = _json.dumps([{"a": i} for i in range(50)]).encode()
+        result = classify_response(
+            status=200,
+            body=body,
+            headers={"Content-Type": "application/json"},
+            rules=ContentRules(min_body_bytes=10, expected_content_type="html"),
+        )
+        self.assertIs(result.verdict, Verdict.PARSE_FAIL)
+        self.assertIn("the body is not html", result.reason)
+
+
 if __name__ == "__main__":
     unittest.main()
 

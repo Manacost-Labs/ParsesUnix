@@ -28,8 +28,9 @@ production statistic is written, no provider verdict changes.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from dataclasses import fields as dataclass_fields
 from decimal import Decimal
 from typing import Any
 
@@ -106,6 +107,10 @@ class AttemptOutcome:
     eligible: bool = True
     skip_reason: str = ""
     verdict: str | None = None
+    #: Triage's own sentence. Without it a report says PARSE_FAIL and leaves the
+    #: reader to guess between a wrong content type, a missing canary and a
+    #: redirect — three different problems with three different owners.
+    verdict_reason: str = ""
     #: Triage said OK against the corpus rules. The headline denominator.
     validated: bool = False
     target_status: int | None = None
@@ -170,6 +175,7 @@ class AttemptOutcome:
             "eligible": self.eligible,
             "skip_reason": self.skip_reason,
             "verdict": self.verdict,
+            "verdict_reason": self.verdict_reason,
             "validated": self.validated,
             "scored": self.scored,
             "target_status": self.target_status,
@@ -192,6 +198,18 @@ class AttemptOutcome:
             "error_kind": self.error_kind,
             "block_signature": self.block_signature,
         }
+
+
+def outcome_from_dict(payload: Mapping[str, Any]) -> AttemptOutcome:
+    """Rebuild one recorded attempt, so a session can be re-read without re-running.
+
+    Re-rendering a report must never mean re-calling the providers: the numbers
+    would change, and the question the artifact answers would silently become a
+    different one.
+    """
+
+    fields = {f.name for f in dataclass_fields(AttemptOutcome)}
+    return AttemptOutcome(**{k: v for k, v in payload.items() if k in fields})
 
 
 @dataclass(frozen=True)
@@ -240,12 +258,19 @@ class CalibrationHarness:
         Built before anything runs so the fairness claim can be checked rather
         than asserted: every provider appears against every target.
 
-        The order is ``segment -> provider -> price -> target``, and it is the
-        order that makes §"stop early" mean anything. Walking target-first would
-        run the expensive mode on the first two pages before the cheap one had
-        finished proving itself, so the saving would arrive after the money was
-        already spent. Sweeping the cheapest strategy across a whole segment
-        first is what turns "the cheap one works here" into calls not made.
+        The order is ``provider -> price -> segment -> target``, and both of the
+        first two positions were paid for in real money.
+
+        Walking target-first ran the expensive mode on the first pages before
+        the cheap one had finished proving itself, so early stopping saved
+        nothing. Walking segment-first fixed that but produced something worse:
+        within each segment a vendor spent on its dearest strategies before its
+        cheapest had seen the rest of the corpus, so a per-vendor cap could be
+        exhausted on three premium calls and the vendor would appear in the
+        report having validated nothing — not because it failed, but because it
+        never got to try. Sweeping each vendor's cheapest strategy across the
+        WHOLE corpus first is what makes a cap cut off the expensive tail rather
+        than the evidence.
         """
 
         planned: list[PlannedCall] = []
@@ -263,7 +288,9 @@ class CalibrationHarness:
                             reason=("" if applicable else _inappropriate_reason(strategy, verdict)),
                         )
                     )
-        planned.sort(key=lambda c: (c.target.kind.value, c.provider, c.strategy.nominal_cost))
+        planned.sort(
+            key=lambda c: (c.provider, c.strategy.nominal_cost, c.target.kind.value, c.target.url)
+        )
         return planned
 
     def fairness(self) -> dict[str, Any]:
@@ -411,6 +438,7 @@ class CalibrationHarness:
             call,
             attempted=True,
             verdict=triage.verdict.value,
+            verdict_reason=triage.reason,
             validated=triage.verdict is Verdict.OK,
             target_status=response.target_status,
             provider_status=response.provider_status,
