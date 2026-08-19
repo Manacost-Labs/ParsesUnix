@@ -34,7 +34,7 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from web_scraper.contracts import Cost, CostCertainty
@@ -199,8 +199,18 @@ FIRECRAWL = PricingSnapshot(
 )
 
 #: Bright Data: billed CPM — per 1000 successful requests — so the native unit
-#: is a request, not a credit. Premium domains are documented to cost more with
-#: no published multiplier, so NOTHING here is deterministic.
+#: is a request, not a credit.
+#:
+#: MEASURED 2026-08-19 with a live zone: the response carries no cost figure of
+#: any kind. Without a rate this adapter therefore settles every call as
+#: UNKNOWN, which correctly halts paid work — and correctly makes the provider
+#: unusable, because one call per run is not a provider.
+#:
+#: The way out is not to weaken the rule. It is for the OPERATOR to supply the
+#: CPM from their own account, which is a documented figure they can read off
+#: their pricing page. ``BRIGHTDATA_CPM_USD`` does that, and it should be the
+#: PREMIUM rate wherever premium domains are enabled: the bound has to be the
+#: worst case, not the typical one.
 BRIGHT_DATA = PricingSnapshot(
     provider="brightdata",
     native_unit="requests",
@@ -229,13 +239,76 @@ BRIGHT_DATA = PricingSnapshot(
     },
 )
 
+#: Environment variable carrying the operator's own Bright Data CPM, in USD per
+#: 1000 successful requests. Absent means we cannot bound a call and every one
+#: settles UNKNOWN.
+BRIGHT_DATA_CPM_ENV = "BRIGHTDATA_CPM_USD"
+
+
+def bright_data_snapshot(cpm_usd: Decimal | str | None) -> PricingSnapshot:
+    """Bright Data priced from the operator's own tariff.
+
+    With a CPM the per-request cost is ``cpm / 1000`` and the rates become
+    *deterministic*: an unreported cost can be settled provisionally at that
+    bound, because the operator read the figure off their own account rather
+    than us guessing it.
+
+    Without one, nothing changes: every call is UNKNOWN and spending stops.
+    That is the honest default, not a broken one.
+    """
+
+    if cpm_usd is None:
+        return BRIGHT_DATA
+    try:
+        cpm = Decimal(str(cpm_usd))
+    except (InvalidOperation, ValueError, TypeError):
+        return BRIGHT_DATA
+    if cpm <= 0:
+        return BRIGHT_DATA
+
+    per_request = (cpm / Decimal("1000")).quantize(Decimal("0.000001"))
+    note = f"operator-supplied CPM {cpm} USD/1000 successful requests"
+    return PricingSnapshot(
+        provider="brightdata",
+        native_unit="requests",
+        pricing_source=f"{BRIGHT_DATA_CPM_ENV} set by the operator",
+        docs_verified_at=BRIGHT_DATA.docs_verified_at,
+        effective_at=BRIGHT_DATA.effective_at,
+        version="2",
+        rates={
+            "unlocker": StrategyRate(Decimal("1"), per_request, deterministic=True, note=note),
+            "unlocker_render": StrategyRate(
+                Decimal("1"), per_request, deterministic=True, note=note
+            ),
+            # The Browser API is a distinct product on a distinct tariff, so one
+            # CPM does not cover it. It stays unbounded until priced separately.
+            "browser": StrategyRate(
+                Decimal("1"),
+                per_request * Decimal("2"),
+                deterministic=False,
+                note="Browser API is a separate product; the unlocker CPM does not price it",
+            ),
+        },
+    )
+
+
 DEFAULT_SNAPSHOTS: tuple[PricingSnapshot, ...] = (SCRAPE_DO, FIRECRAWL, BRIGHT_DATA)
 
 
 class PricingBook:
     """Every tariff in one place, with the conversions the router needs."""
 
-    def __init__(self, snapshots: tuple[PricingSnapshot, ...] = DEFAULT_SNAPSHOTS) -> None:
+    def __init__(self, snapshots: tuple[PricingSnapshot, ...] | None = None) -> None:
+        if snapshots is None:
+            # Bright Data is priced from the operator's own account when they
+            # have told us the rate, and left unbounded when they have not.
+            import os
+
+            snapshots = (
+                SCRAPE_DO,
+                FIRECRAWL,
+                bright_data_snapshot(os.environ.get(BRIGHT_DATA_CPM_ENV)),
+            )
         self._by_provider = {snapshot.provider: snapshot for snapshot in snapshots}
 
     def snapshot(self, provider: str) -> PricingSnapshot | None:

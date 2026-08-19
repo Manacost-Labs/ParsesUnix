@@ -56,6 +56,18 @@ API_ENDPOINT = "https://api.brightdata.com/request"
 #: about OUR configuration would be recorded as a verdict about the SITE. That
 #: is precisely the confusion the provider contract exists to prevent, and only
 #: a live call surfaced it.
+#: MEASURED 2026-08-19 with a live zone. Bright Data ALWAYS answers 200 in the
+#: envelope; the site's own status arrives here.
+#:
+#: A request for a page that does not exist came back: envelope 200,
+#: ``x-brd-status-code: 404``, 153 bytes of "404 Not Found". An adapter reading
+#: the envelope status would call that a successful fetch, triage would say
+#: THIN_CONTENT instead of DEAD_URL, the URL would never be quarantined, and it
+#: would be re-fetched every run — each time billed, because CPM counts
+#: successful requests. An earlier version of this adapter read a header name
+#: that does not exist and fell back to exactly that.
+HEADER_TARGET_STATUS = "x-brd-status-code"
+
 HEADER_ERROR_CODE = "x-brd-err-code"
 HEADER_ERROR_MESSAGE = "x-brd-err-msg"
 HEADER_ERROR = "x-brd-error"
@@ -223,7 +235,7 @@ class BrightDataProvider:
 
         # format=raw returns the target document itself, so the envelope status
         # is the vendor's and the target status must come from their headers.
-        target_status = _as_int(result.headers.get("x-brd-http-status"))
+        target_status = _as_int(result.headers.get(HEADER_TARGET_STATUS))
         return ProviderResponse(
             provider=self.name,
             strategy_id=request.strategy_id,

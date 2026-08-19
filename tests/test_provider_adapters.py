@@ -18,6 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from web_scraper.contracts import Verdict
 from web_scraper.providers.base import ProviderError, ProviderErrorKind, ProviderRequest
 from web_scraper.providers.bright_data import BrightDataProvider
 from web_scraper.providers.firecrawl import (
@@ -210,10 +211,40 @@ class BrightDataTests(unittest.TestCase):
         self.assertEqual(http.payload["zone"], "browser1")
 
     def test_the_target_status_is_read_from_the_vendor_header(self) -> None:
-        http = FakeHTTP(status=200, body=b"not found", headers={"x-brd-http-status": "404"})
+        # MEASURED 2026-08-19: Bright Data ALWAYS answers 200 in the envelope
+        # and puts the site's own status in x-brd-status-code. A request for a
+        # missing page came back envelope 200 / x-brd-status-code 404.
+        #
+        # This test previously used `x-brd-http-status`, a name that does not
+        # exist — the same wrong assumption the adapter held. A test written
+        # from the code's own mistake cannot catch it, and this one did not:
+        # it passed while every dead URL was being reported as a successful
+        # fetch of a 153-byte page.
+        http = FakeHTTP(status=200, body=b"not found", headers={"x-brd-status-code": "404"})
         response = self.provider(http).fetch(ProviderRequest(url=URL, strategy_id="unlocker"))
         self.assertEqual(response.target_status, 404)
         self.assertEqual(response.provider_status, 200)
+
+    def test_a_dead_url_behind_a_200_envelope_is_still_a_dead_url(self) -> None:
+        # The consequence the header name protects: without it the URL is never
+        # quarantined and is re-fetched every run, billed every time, because
+        # CPM counts successful requests.
+        from web_scraper.contracts import ContentRules
+        from web_scraper.triage import classify_response
+
+        http = FakeHTTP(
+            status=200,
+            body=b"<html><head><title>404 Not Found</title></head><body>nope</body></html>",
+            headers={"x-brd-status-code": "404"},
+        )
+        response = self.provider(http).fetch(ProviderRequest(url=URL, strategy_id="unlocker"))
+        verdict = classify_response(
+            status=response.target_status,
+            body=response.body,
+            headers=response.headers,
+            rules=ContentRules(min_body_bytes=500),
+        )
+        self.assertEqual(verdict.verdict, Verdict.DEAD_URL)
 
     def test_cpm_billing_means_a_single_call_reports_no_cost(self) -> None:
         http = FakeHTTP(body=b"<html>ok</html>")

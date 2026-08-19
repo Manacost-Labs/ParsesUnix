@@ -208,3 +208,50 @@ class EscalatorSettlementTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OperatorSuppliedRateTests(unittest.TestCase):
+    """Bright Data reports no cost, so the bound has to come from the operator.
+
+    MEASURED 2026-08-19 with a live zone: the response carries no cost figure of
+    any kind. Every call therefore settles UNKNOWN, which correctly halts paid
+    work - and correctly makes the provider unusable, since one call per run is
+    not a provider.
+
+    The answer is not to weaken the rule. It is for the operator to supply the
+    CPM from their own account, which is a figure they can read off their
+    pricing page rather than one we invent.
+    """
+
+    def test_without_a_rate_every_call_is_unknown(self) -> None:
+        from web_scraper.providers.pricing import bright_data_snapshot
+
+        book = PricingBook((bright_data_snapshot(None),))
+        self.assertIs(book.settle("brightdata", "unlocker", None).certainty, CostCertainty.UNKNOWN)
+
+    def test_a_supplied_cpm_makes_a_call_boundable(self) -> None:
+        from web_scraper.providers.pricing import bright_data_snapshot
+
+        book = PricingBook((bright_data_snapshot("1.50"),))
+        cost = book.settle("brightdata", "unlocker", None)
+        self.assertIs(cost.certainty, CostCertainty.PROVISIONAL)
+        self.assertEqual(cost.estimated_usd, Decimal("0.001500"))
+        self.assertEqual(cost.native_unit, "requests")
+
+    def test_the_browser_api_is_not_covered_by_the_unlocker_rate(self) -> None:
+        # A separate product on a separate tariff. One CPM does not price both.
+        from web_scraper.providers.pricing import bright_data_snapshot
+
+        book = PricingBook((bright_data_snapshot("1.50"),))
+        self.assertIs(book.settle("brightdata", "browser", None).certainty, CostCertainty.UNKNOWN)
+
+    def test_a_nonsense_rate_is_refused_rather_than_used(self) -> None:
+        from web_scraper.providers.pricing import bright_data_snapshot
+
+        for bad in ("", "abc", "0", "-5"):
+            with self.subTest(rate=bad):
+                book = PricingBook((bright_data_snapshot(bad),))
+                self.assertIs(
+                    book.settle("brightdata", "unlocker", None).certainty,
+                    CostCertainty.UNKNOWN,
+                )
