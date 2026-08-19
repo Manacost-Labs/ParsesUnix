@@ -19,13 +19,24 @@ from web_scraper.finops.analysis import (
 )
 from web_scraper.finops.canary import CanaryOutcome, CanaryStatus, PaidCanary, select_canary_urls
 from web_scraper.finops.estimate import CostEstimate, PhasePlan, estimate_run_cost
+from web_scraper.finops.free_canary import (
+    CanaryUrl,
+    FreeCanary,
+    FreeCanaryOutcome,
+    FreeCanaryStatus,
+    stratified_sample,
+)
 
 __all__ = [
     "CanaryOutcome",
     "CanaryStatus",
+    "CanaryUrl",
     "CostAnomaly",
     "CostEstimate",
     "CounterfactualSavings",
+    "FreeCanary",
+    "FreeCanaryOutcome",
+    "FreeCanaryStatus",
     "PaidCanary",
     "PhasePlan",
     "SpendReport",
@@ -33,5 +44,6 @@ __all__ = [
     "detect_anomalies",
     "estimate_run_cost",
     "select_canary_urls",
+    "stratified_sample",
     "summarise_spend",
 ]

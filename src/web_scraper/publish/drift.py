@@ -34,30 +34,49 @@ from typing import Any
 #: Fraction of the baseline record count below which the dataset is suspect.
 DEFAULT_MIN_RECORD_RATIO = 0.7
 
-#: Null-rate growth on a critical field that stops a promotion.
+#: Null-rate growth on a critical field that stops a promotion, as a ratio.
 DEFAULT_MAX_NULL_GROWTH = 2.0
 
+#: ...and the absolute floor that ratio must also clear.
+#:
+#: A ratio alone is useless near zero. A field going from 0.1% null to 1% null
+#: is a 10x increase and a 0.9 percentage-point change — almost certainly noise
+#: on a dataset of any size, and blocking on it trains operators to ignore the
+#: gate. Requiring BOTH a large ratio and a material absolute move keeps the
+#: alarm meaningful.
+DEFAULT_MIN_NULL_GROWTH_POINTS = 0.05
+
 #: Extraction sources, best first. A field moving down this list has degraded
-#: even when its value still looks reasonable.
-PROVENANCE_RANK = {
-    "json_ld": 0,
-    "app_state": 1,
-    "microdata": 2,
-    "meta": 3,
-    "css": 4,
-    "xpath": 4,
-    "heuristic": 5,
+#: even when its value still looks reasonable. Overridable per call, because a
+#: project whose extraction layer has different tiers needs its own ordering
+#: rather than a silently wrong comparison against these names.
+DEFAULT_PROVENANCE_RANK = {
+    "structured_api": 0,
+    "json_ld": 1,
+    "app_state": 2,
+    "microdata": 3,
+    "meta": 4,
+    "css": 5,
+    "xpath": 5,
+    "heuristic": 6,
 }
 
 
 class DriftVerdict(StrEnum):
     PASS = "PASS"  # noqa: S105 - a gate verdict, not a credential
+    #: Nothing to compare against. Distinct from PASS on purpose: an operator
+    #: reading "PASS" is entitled to believe something was checked.
+    PASS_WITHOUT_BASELINE = "PASS_WITHOUT_BASELINE"  # noqa: S105 - a verdict
     WARN = "WARN"
     BLOCK_PROMOTION = "BLOCK_PROMOTION"
 
     @property
     def allows_promotion(self) -> bool:
         return self is not DriftVerdict.BLOCK_PROMOTION
+
+    @property
+    def was_evaluated(self) -> bool:
+        return self is not DriftVerdict.PASS_WITHOUT_BASELINE
 
 
 @dataclass(frozen=True)
@@ -202,14 +221,23 @@ def check_drift(
     critical_fields: Sequence[str] = (),
     min_record_ratio: float = DEFAULT_MIN_RECORD_RATIO,
     max_null_growth: float = DEFAULT_MAX_NULL_GROWTH,
+    min_null_growth_points: float = DEFAULT_MIN_NULL_GROWTH_POINTS,
     pagination_complete: bool | None = None,
+    provenance_rank: Mapping[str, int] | None = None,
 ) -> DriftReport:
-    """Compare a staged dataset against the last healthy one."""
+    """Compare a staged dataset against the last healthy one.
+
+    ``min_record_ratio`` belongs to the *profile*, not to this function: a
+    price-comparison listing that legitimately halves overnight and an archive
+    that should never shrink cannot share one threshold. The default is a
+    starting point, not a law.
+    """
 
     if baseline is None:
-        # A first run has nothing to drift from. Manufacturing a comparison
-        # here would produce a gate that always passes and looks like it checked.
-        return DriftReport(DriftVerdict.PASS, (), None, current)
+        # A first run has nothing to drift from. Manufacturing a comparison here
+        # would produce a gate that always passes and looks like it checked, so
+        # the verdict names the situation instead of implying an evaluation.
+        return DriftReport(DriftVerdict.PASS_WITHOUT_BASELINE, (), None, current)
 
     findings: list[DriftFinding] = []
     critical = set(critical_fields)
@@ -273,10 +301,13 @@ def check_drift(
     for name in sorted(baseline.fields & current.fields):
         base_rate = baseline.null_rates.get(name, 0.0)
         rate = current.null_rates.get(name, 0.0)
-        grew = (base_rate > 0 and rate > base_rate * max_null_growth) or (
+        # Both tests must fire: a large relative move AND a material absolute
+        # one. Either alone produces alarms nobody can act on.
+        relative = (base_rate > 0 and rate > base_rate * max_null_growth) or (
             base_rate == 0 and rate > 0
         )
-        if grew:
+        absolute = (rate - base_rate) >= min_null_growth_points
+        if relative and absolute:
             findings.append(
                 DriftFinding(
                     kind="null_rate_growth",
@@ -294,8 +325,9 @@ def check_drift(
         after_source = current.dominant_source(name)
         if not before_source or not after_source or before_source == after_source:
             continue
-        before_rank = PROVENANCE_RANK.get(before_source, 99)
-        after_rank = PROVENANCE_RANK.get(after_source, 99)
+        ranking = provenance_rank if provenance_rank is not None else DEFAULT_PROVENANCE_RANK
+        before_rank = ranking.get(before_source, 99)
+        after_rank = ranking.get(after_source, 99)
         if after_rank > before_rank:
             findings.append(
                 DriftFinding(

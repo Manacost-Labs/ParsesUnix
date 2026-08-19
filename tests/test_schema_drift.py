@@ -32,9 +32,12 @@ def rows(n: int, *, title="Some title", price=10, source="json_ld", extra=None):
 
 
 class BaselineTests(unittest.TestCase):
-    def test_a_first_run_passes_because_there_is_nothing_to_compare(self) -> None:
+    def test_a_first_run_says_it_was_not_evaluated_rather_than_passed(self) -> None:
+        # An operator reading "PASS" is entitled to believe something was checked.
         report = check_drift(SchemaSnapshot.from_rows(rows(50)), None)
-        self.assertEqual(report.verdict, DriftVerdict.PASS)
+        self.assertEqual(report.verdict, DriftVerdict.PASS_WITHOUT_BASELINE)
+        self.assertTrue(report.verdict.allows_promotion, "a first run must still publish")
+        self.assertFalse(report.verdict.was_evaluated)
         self.assertIn("nothing to drift from", report.explain())
 
     def test_an_identical_dataset_reports_nothing(self) -> None:
@@ -170,3 +173,66 @@ class SnapshotTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NullGrowthThresholdTests(unittest.TestCase):
+    """A ratio alone is useless near zero."""
+
+    def rows_with_null_rate(self, n, *, null_fraction):
+        nulls = int(n * null_fraction)
+        out = []
+        for i in range(n):
+            out.append({"t": "" if i < nulls else "value", "_extractor_source": {"t": "json_ld"}})
+        return out
+
+    def test_a_tenfold_move_on_a_tiny_base_does_not_block(self) -> None:
+        # 0.1% -> 1% is 10x and 0.9 percentage points. Blocking here trains
+        # operators to ignore the gate.
+        base = SchemaSnapshot.from_rows(self.rows_with_null_rate(1000, null_fraction=0.001))
+        current = SchemaSnapshot.from_rows(self.rows_with_null_rate(1000, null_fraction=0.01))
+        report = check_drift(current, base, critical_fields=["t"])
+        self.assertTrue(report.verdict.allows_promotion)
+
+    def test_a_move_that_is_both_large_and_material_blocks(self) -> None:
+        base = SchemaSnapshot.from_rows(self.rows_with_null_rate(1000, null_fraction=0.02))
+        current = SchemaSnapshot.from_rows(self.rows_with_null_rate(1000, null_fraction=0.40))
+        report = check_drift(current, base, critical_fields=["t"])
+        self.assertEqual(report.verdict, DriftVerdict.BLOCK_PROMOTION)
+
+    def test_a_large_absolute_move_with_a_small_ratio_does_not_block(self) -> None:
+        # 40% -> 50% is +10pp but only 1.25x: a shift, not a collapse.
+        base = SchemaSnapshot.from_rows(self.rows_with_null_rate(1000, null_fraction=0.40))
+        current = SchemaSnapshot.from_rows(self.rows_with_null_rate(1000, null_fraction=0.50))
+        report = check_drift(current, base, critical_fields=["t"])
+        self.assertTrue(report.verdict.allows_promotion)
+
+
+class ConfigurableThresholdTests(unittest.TestCase):
+    def test_a_volatile_dataset_can_set_its_own_record_floor(self) -> None:
+        # A listing that legitimately halves overnight and an archive that must
+        # never shrink cannot share one threshold.
+        base = SchemaSnapshot.from_rows(rows(1000))
+        current = SchemaSnapshot.from_rows(rows(400))
+        strict = check_drift(current, base)
+        lenient = check_drift(current, base, min_record_ratio=0.3)
+        self.assertEqual(strict.verdict, DriftVerdict.BLOCK_PROMOTION)
+        self.assertTrue(lenient.verdict.allows_promotion)
+
+    def test_a_project_can_supply_its_own_provenance_ordering(self) -> None:
+        base = SchemaSnapshot.from_rows(rows(100, source="tier_a"))
+        current = SchemaSnapshot.from_rows(rows(100, source="tier_b"))
+        # Unknown names to the default ranking: no degradation is claimed.
+        default = check_drift(current, base, critical_fields=["title"])
+        self.assertTrue(default.verdict.allows_promotion)
+        # With the project's own ordering, the fall is visible.
+        ranked = check_drift(
+            current, base, critical_fields=["title"], provenance_rank={"tier_a": 0, "tier_b": 9}
+        )
+        self.assertEqual(ranked.verdict, DriftVerdict.BLOCK_PROMOTION)
+
+    def test_a_structured_api_outranks_json_ld(self) -> None:
+        from web_scraper.publish.drift import DEFAULT_PROVENANCE_RANK
+
+        self.assertLess(
+            DEFAULT_PROVENANCE_RANK["structured_api"], DEFAULT_PROVENANCE_RANK["json_ld"]
+        )
