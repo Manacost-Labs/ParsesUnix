@@ -14,12 +14,20 @@ from web_scraper.providers.base import (
     ProviderResponse,
     ProviderStrategy,
 )
-from web_scraper.providers.breaker import ProviderBreakers
+from web_scraper.providers.breaker import (
+    Admission,
+    BreakerState,
+    BreakerStore,
+    ProviderBreakers,
+)
 from web_scraper.providers.escalation import PaidAttempt, PaidEscalator
 from web_scraper.providers.router import PaidDecision, PaidProviderRouter
 from web_scraper.providers.scrape_do import ScrapeDoProvider
 
 __all__ = [
+    "Admission",
+    "BreakerState",
+    "BreakerStore",
     "PaidAttempt",
     "PaidDecision",
     "PaidEscalator",

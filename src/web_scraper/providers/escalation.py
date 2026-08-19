@@ -136,6 +136,13 @@ class PaidEscalator:
 
         strategy = next(s for s in available if s.id == decision.strategy_id)
 
+        # 4b. Claim permission for exactly this one call. A half-open breaker
+        #     admits a single trial; without claiming it here a whole batch
+        #     would pour through the moment a cooldown expired.
+        admission = self.breakers.admit(self.provider.name, strategy.id)
+        if not admission.allowed:
+            return PaidAttempt(False, admission.reason, decision=decision)
+
         # 5. Hold the WORST case, not the typical cost.
         try:
             reservation = self.budget.reserve(
@@ -145,6 +152,8 @@ class PaidEscalator:
                 target_hash=_target_hash(url),
             )
         except BudgetExceeded as exc:
+            # We never called the provider, so this was not a trial of it.
+            self.breakers.release_probe(self.provider.name, strategy.id)
             return PaidAttempt(False, f"budget refused the hold: {exc}", decision=decision)
 
         request = ProviderRequest(url=url, strategy_id=strategy.id, wait_selector=wait_selector)
