@@ -427,3 +427,146 @@ class CsrEscalationTests(unittest.TestCase):
         self.assertEqual(outcome.result.verdict, Verdict.CSR_REQUIRED)
         # Rendering is our job, not a provider's: this must not read as "buy credits".
         self.assertFalse(outcome.paid_escalation_candidate)
+
+
+class PaidEscalationWiringTests(unittest.TestCase):
+    """The gateway's paid step: when it runs, and — mostly — when it does not."""
+
+    def setUp(self) -> None:
+        import tempfile
+        from decimal import Decimal
+
+        from web_scraper.budget import BudgetLedger
+        from web_scraper.providers.escalation import PaidEscalator
+        from web_scraper.providers.router import PaidProviderRouter
+
+        self.Decimal = Decimal
+        tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        self.budget = BudgetLedger(Path(tempdir.name) / "b.sqlite3", daily_credit_limit="100")
+        self._make = lambda provider: PaidEscalator(
+            provider,
+            budget=self.budget,
+            router=PaidProviderRouter(stats=None, _rng=lambda: 1.0),
+        )
+
+    def provider(self, body: bytes = b"", *, target_status: int = 200):
+        from web_scraper.providers.base import ProviderCost, ProviderResponse
+        from web_scraper.providers.scrape_do import STRATEGIES
+
+        page = body or (b"<html><body><article>" + b"word " * 200 + b"</article></body></html>")
+
+        class Recording:
+            name = "scrape.do"
+
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def strategies(self):
+                return STRATEGIES
+
+            def fetch(self, request):
+                self.calls.append(request.strategy_id)
+                return ProviderResponse(
+                    provider="scrape.do",
+                    strategy_id=request.strategy_id,
+                    target_status=target_status,
+                    provider_status=200,
+                    body=page,
+                    headers={"Content-Type": "text/html"},
+                    cost=ProviderCost.parse("5"),
+                    request_id="req-9",
+                )
+
+        return Recording()
+
+    def blocked_profile(self):
+        return make_profile(
+            {"type": "direct_http", "level": "L1"}, [{"type": "dynamic", "level": "L2"}]
+        )
+
+    def run_gateway(self, escalator, *, scenario: str = "blocked"):
+        profile = self.blocked_profile()
+        transports = {
+            "L1": FakeTransport({PAGE_URL: [fixture_response(scenario)]}),
+            "L2": FakeTransport({PAGE_URL: [fixture_response(scenario)]}),
+        }
+        gateway = FetchGateway(
+            profile,
+            transport_provider=lambda route, _c, _u: transports[route.level.value],
+            pacer=RecordingPacer(),
+            paid_escalator=escalator,
+        )
+        return gateway.fetch_url(PAGE_URL)
+
+    def test_a_gateway_without_an_escalator_cannot_spend(self) -> None:
+        outcome = self.run_gateway(None)
+        self.assertEqual(outcome.result.verdict, Verdict.BLOCKED)
+        self.assertIsNone(outcome.paid)
+        self.assertEqual(outcome.cost_credits, "0")
+        self.assertEqual(self.budget.usage().credits, self.Decimal("0"))
+
+    def test_paid_runs_only_after_every_free_route_is_spent(self) -> None:
+        provider = self.provider()
+        outcome = self.run_gateway(self._make(provider))
+        levels = [a.level.value for a in outcome.result.attempts]
+        self.assertEqual(levels, ["L1", "L2", "L3"], "L3 comes last, never first")
+        self.assertEqual(len(provider.calls), 1, "at most one paid call per URL")
+
+    def test_a_successful_paid_fetch_becomes_the_result(self) -> None:
+        outcome = self.run_gateway(self._make(self.provider()))
+        self.assertEqual(outcome.result.verdict, Verdict.OK)
+        self.assertIsNotNone(outcome.response)
+        assert outcome.response is not None
+        self.assertIn(b"<article>", outcome.response.body, "downstream sees ordinary bytes")
+        self.assertEqual(outcome.response.status, 200, "the TARGET status, not the provider's")
+
+    def test_the_cost_reported_is_the_cost_billed(self) -> None:
+        outcome = self.run_gateway(self._make(self.provider()))
+        self.assertEqual(outcome.cost_credits, "5")
+        self.assertEqual(self.budget.usage().credits, self.Decimal("5"))
+        l3 = next(a for a in outcome.result.attempts if a.level.value == "L3")
+        self.assertEqual(l3.cost_credits, "5")
+        self.assertEqual(l3.provider, "scrape.do")
+        self.assertEqual(l3.request_id, "req-9")
+
+    def test_a_free_success_never_reaches_the_provider(self) -> None:
+        provider = self.provider()
+        outcome = self.run_gateway(self._make(provider), scenario="success")
+        self.assertEqual(outcome.result.verdict, Verdict.OK)
+        self.assertEqual(provider.calls, [], "nothing was blocked, so nothing was bought")
+        self.assertIsNone(outcome.paid)
+
+    def test_a_dead_url_never_reaches_the_provider(self) -> None:
+        provider = self.provider()
+        outcome = self.run_gateway(self._make(provider), scenario="dead-url")
+        self.assertEqual(outcome.result.verdict, Verdict.DEAD_URL)
+        self.assertEqual(provider.calls, [])
+        self.assertEqual(self.budget.usage().credits, self.Decimal("0"))
+
+    def test_an_origin_outage_never_reaches_the_provider(self) -> None:
+        provider = self.provider()
+        outcome = self.run_gateway(self._make(provider), scenario="origin-down")
+        self.assertEqual(outcome.result.verdict, Verdict.ORIGIN_DOWN)
+        self.assertEqual(provider.calls, [])
+
+    def test_a_refusal_to_spend_is_still_recorded(self) -> None:
+        # Exhaust the budget, then confirm the URL still explains itself.
+        self.budget.settle(
+            self.budget.reserve(provider="scrape.do", credits=100), actual_credits=100
+        )
+        provider = self.provider()
+        outcome = self.run_gateway(self._make(provider))
+        self.assertEqual(provider.calls, [])
+        self.assertIsNotNone(outcome.paid)
+        assert outcome.paid is not None
+        self.assertFalse(outcome.paid.attempted)
+        l3 = next(a for a in outcome.result.attempts if a.level.value == "L3")
+        self.assertEqual(l3.verdict, Verdict.BLOCKED, "the free verdict survives a refusal")
+        self.assertIn("EXHAUSTED", l3.reason)
+
+    def test_a_provider_that_is_also_blocked_keeps_the_block_verdict(self) -> None:
+        challenge = b"<html><title>Just a moment...</title>checking your browser</html>"
+        outcome = self.run_gateway(self._make(self.provider(challenge)))
+        self.assertEqual(outcome.result.verdict, Verdict.SOFT_BLOCK)
+        self.assertEqual(outcome.cost_credits, "5", "a failed paid attempt is still billed")

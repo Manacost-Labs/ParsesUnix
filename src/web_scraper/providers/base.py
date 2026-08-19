@@ -31,6 +31,10 @@ class ProviderErrorKind(StrEnum):
     PROVIDER_FAULT = "PROVIDER_FAULT"  # 5xx from the provider itself
     BAD_REQUEST = "BAD_REQUEST"  # we built the call wrong
     TRANSPORT = "TRANSPORT"  # we never reached the provider
+    #: The provider answered, but not with something we can use — truncated
+    #: body, unparseable envelope. Distinct from a target that served bad
+    #: content, which is a triage verdict.
+    MALFORMED_RESPONSE = "MALFORMED_RESPONSE"
 
 
 @dataclass(frozen=True)

@@ -14,6 +14,11 @@ Escalation policy (the load-bearing invariant of this module):
 - ``PARSE_FAIL`` and ``THIN_CONTENT`` may try other same-or-cheaper routes and
   never raise the level;
 - a per-domain circuit breaker short-circuits a domain that keeps hard-failing.
+
+A paid provider may be attached (``paid_escalator``). It runs *after* every free
+route is exhausted, only for ``BLOCKED``/``SOFT_BLOCK``, and at most once per
+URL. Without one the gateway is free by construction: there is no code path that
+spends money when the argument is absent.
 """
 
 from __future__ import annotations
@@ -51,6 +56,8 @@ from web_scraper.fetchers.transports import (
 from web_scraper.fingerprints import FailureFingerprint, FingerprintStore, fingerprint_attempt
 from web_scraper.probe.safety import Resolver, UnsafeTarget
 from web_scraper.profiles.model import SiteProfile, UrlClass
+from web_scraper.providers.base import ProviderResponse
+from web_scraper.providers.escalation import PaidAttempt, PaidEscalator
 from web_scraper.routing.router import AdaptiveRouter
 from web_scraper.routing.stats import RouteKey, RouteStatsStore
 from web_scraper.storage.snapshots import SnapshotStore
@@ -157,10 +164,21 @@ class GatewayOutcome:
     response: RawResponse | None
     skipped_routes: tuple[dict[str, Any], ...]
     snapshot_paths: tuple[str, ...]
+    #: Present whenever a paid provider was configured and the free routes ended
+    #: on a verdict that reached it - including when it declined to spend.
+    paid: PaidAttempt | None = None
 
     @property
     def paid_escalation_candidate(self) -> bool:
         return self.result.verdict in PAID_ESCALATION_VERDICTS
+
+    @property
+    def cost_credits(self) -> str:
+        """What this URL cost. "0" is a measured zero; None would be a guess."""
+
+        if self.paid is None or self.paid.actual_cost is None:
+            return "0"
+        return str(self.paid.actual_cost)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -168,7 +186,53 @@ class GatewayOutcome:
             "paid_escalation_candidate": self.paid_escalation_candidate,
             "skipped_routes": list(self.skipped_routes),
             "snapshot_paths": list(self.snapshot_paths),
+            "paid": self.paid.to_dict() if self.paid else None,
         }
+
+
+def _raw_from_provider(url: str, response: ProviderResponse) -> RawResponse:
+    """Present a provider answer as an ordinary response.
+
+    Extraction downstream must not care who fetched the bytes. Note the status
+    is the *target* status: what the site said, not what the provider said.
+    """
+
+    return RawResponse(
+        requested_url=url,
+        final_url=response.final_url or url,
+        status=response.target_status,
+        headers=dict(response.headers),
+        body=response.body,
+        elapsed_ms=response.latency_ms,
+    )
+
+
+def _paid_attempt_record(url: str, paid: PaidAttempt, *, free_verdict: Verdict) -> Attempt:
+    """One ledger line per paid decision, including the decisions not to spend.
+
+    A refusal is recorded as an attempt too: a run report that shows only the
+    calls that happened cannot answer "why did this URL stay blocked?".
+    """
+
+    if not paid.attempted:
+        # Nothing was spent and nothing was learned about the site, so the
+        # verdict stays exactly what the free routes established.
+        verdict = free_verdict
+    else:
+        verdict = paid.triage.verdict if paid.triage is not None else Verdict.PROVIDER_ERROR
+    response = paid.response
+    return Attempt(
+        url=url,
+        level=Level.L3,
+        verdict=verdict,
+        reason=paid.reason,
+        status=response.target_status if response else None,
+        body_bytes=len(response.body) if response else 0,
+        elapsed_ms=response.latency_ms if response else None,
+        provider=response.provider if response else None,
+        cost_credits=str(paid.actual_cost) if paid.actual_cost is not None else "0",
+        request_id=response.request_id if response else None,
+    )
 
 
 class FetchGateway:
@@ -185,6 +249,7 @@ class FetchGateway:
         router: AdaptiveRouter | None = None,
         route_stats: RouteStatsStore | None = None,
         fingerprints: FingerprintStore | None = None,
+        paid_escalator: PaidEscalator | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.profile = profile
@@ -197,6 +262,9 @@ class FetchGateway:
         self._router = router
         self._route_stats = route_stats
         self._fingerprints = fingerprints
+        # Absent by default. The free gateway must stay free unless a caller
+        # deliberately hands it a funded escalator.
+        self._paid = paid_escalator
         self._clock = clock
 
     def fetch_url(self, url: str, *, extra_headers: dict[str, str] | None = None) -> GatewayOutcome:
@@ -339,6 +407,26 @@ class FetchGateway:
                     )
                 )
 
+        # Free routes are done. Only now may money be considered, and only for
+        # the two verdicts that mean "the origin refused us", never for a dead
+        # URL, an origin outage, or a page we simply failed to parse.
+        paid: PaidAttempt | None = None
+        if self._paid is not None and final_verdict in PAID_ESCALATION_VERDICTS:
+            paid = self._paid.attempt(
+                url,
+                verdict=final_verdict,
+                domain=domain,
+                url_class=url_class.name,
+                rules=url_class.content_rules(),
+            )
+            attempts.append(_paid_attempt_record(url, paid, free_verdict=final_verdict))
+            if paid.attempted and paid.triage is not None:
+                # The paid verdict replaces the free one either way: a provider
+                # that also got SOFT_BLOCK is evidence about the site, not noise.
+                final_verdict = paid.triage.verdict
+                if paid.response is not None:
+                    final_response = _raw_from_provider(url, paid.response)
+
         self._breaker.record(domain, final_verdict)
         result = Result(url=url, verdict=final_verdict, attempts=tuple(attempts))
         return GatewayOutcome(
@@ -346,6 +434,7 @@ class FetchGateway:
             response=final_response,
             skipped_routes=tuple(skipped),
             snapshot_paths=tuple(snapshot_paths),
+            paid=paid,
         )
 
     def _plan_routes(

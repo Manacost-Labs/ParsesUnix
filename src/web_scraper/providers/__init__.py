@@ -14,10 +14,18 @@ from web_scraper.providers.base import (
     ProviderResponse,
     ProviderStrategy,
 )
+from web_scraper.providers.breaker import ProviderBreakers
+from web_scraper.providers.escalation import PaidAttempt, PaidEscalator
+from web_scraper.providers.router import PaidDecision, PaidProviderRouter
 from web_scraper.providers.scrape_do import ScrapeDoProvider
 
 __all__ = [
+    "PaidAttempt",
+    "PaidDecision",
+    "PaidEscalator",
+    "PaidProviderRouter",
     "Provider",
+    "ProviderBreakers",
     "ProviderCost",
     "ProviderError",
     "ProviderErrorKind",
