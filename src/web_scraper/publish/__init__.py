@@ -14,6 +14,13 @@ from web_scraper.publish.availability import (
     build_availability,
     summarize_availability,
 )
+from web_scraper.publish.drift import (
+    DriftFinding,
+    DriftReport,
+    DriftVerdict,
+    SchemaSnapshot,
+    check_drift,
+)
 from web_scraper.publish.store import (
     DatasetStore,
     PromoteDecision,
@@ -24,9 +31,14 @@ __all__ = [
     "AvailabilitySLO",
     "DataStatus",
     "DatasetStore",
+    "DriftFinding",
+    "DriftReport",
+    "DriftVerdict",
     "PromoteDecision",
     "RecordAvailability",
+    "SchemaSnapshot",
     "build_availability",
+    "check_drift",
     "summarize_availability",
     "validate_staging",
 ]
