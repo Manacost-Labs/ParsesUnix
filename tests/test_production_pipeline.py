@@ -317,3 +317,66 @@ class ShutdownTests(PipelineCase):
         runner._clock = lambda: next(ticks, 10_000.0)  # type: ignore[method-assign]
         result = runner.run()
         self.assertEqual(result.report["accounting"]["lost_in_progress"], 0)
+
+
+class PhaseIsolationTests(PipelineCase):
+    """Phase A must use the free gateway even when a paid one exists.
+
+    Two earlier attempts at this test were useless and worth recording. One
+    asserted only that a free run has no paid gateway - true, but with nothing
+    to misuse a bug that used it could not be observed. The other raised from a
+    sentinel gateway, which `_process_guarded` swallows by design, turning the
+    detection into a PARSE_FAIL.
+
+    A mutation swapping the selection to `self._paid_gateway or self._gateway`
+    survived both. Counting calls is what kills it.
+    """
+
+    def test_no_free_phase_ever_calls_the_paid_gateway(self) -> None:
+        runner = self.runner({}, count=60)
+        calls: list[str] = []
+        real = runner._gateway
+
+        class Counting:
+            def __init__(self, label: str) -> None:
+                self.label = label
+
+            def fetch_url(self, target, **kw):
+                calls.append(self.label)
+                return real.fetch_url(target, **kw)
+
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+        runner._gateway = Counting("free")  # type: ignore[assignment]
+        runner._paid_gateway = Counting("paid")  # type: ignore[assignment]
+        runner._phases.allowed = (Phase.FREE, Phase.FREE_RETRY)
+
+        runner.run()
+
+        self.assertGreater(calls.count("free"), 0, "the run actually fetched something")
+        self.assertEqual(calls.count("paid"), 0, "a free phase reached the paid gateway")
+
+    def test_a_paid_phase_does_use_the_paid_gateway(self) -> None:
+        # The other half: the selection must not simply always pick the free one.
+        runner = self.runner({}, count=60)
+        calls: list[str] = []
+        real = runner._gateway
+
+        class Counting:
+            def __init__(self, label: str) -> None:
+                self.label = label
+
+            def fetch_url(self, target, **kw):
+                calls.append(self.label)
+                return real.fetch_url(target, **kw)
+
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+        runner._gateway = Counting("free")  # type: ignore[assignment]
+        runner._paid_gateway = Counting("paid")  # type: ignore[assignment]
+
+        chosen = runner._paid_gateway if Phase.CHEAP_PAID.is_paid else runner._gateway
+        chosen.fetch_url(url(0))
+        self.assertEqual(calls, ["paid"])

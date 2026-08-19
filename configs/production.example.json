@@ -1,0 +1,22 @@
+{
+  "_comment": "Copy, edit paths, and keep OUT of version control if you add anything site-specific. No secrets belong in this file: provider tokens come from the environment only.",
+
+  "profile": "profiles/example.yaml",
+  "state_dir": "/var/lib/parsesunix/example",
+  "run_id": "example-daily",
+
+  "seed_urls": [],
+  "batch_size": 50,
+  "deadline_seconds": 21600,
+
+  "sweep": true,
+  "adaptive_routing": true,
+  "browser_pool": true,
+  "max_browser_contexts": 4,
+
+  "free_canary": true,
+  "paid_canary": true,
+
+  "_budget": "Remove daily_credit_limit entirely for a free run. With it absent the paid phases are not even in the phase list.",
+  "daily_credit_limit": "500"
+}
