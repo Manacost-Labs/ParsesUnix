@@ -4,7 +4,35 @@
 Источники: `docs.brightdata.com/api-reference/rest-api/unlocker/unlock-website`,
 `docs.brightdata.com/scraping-automation/web-unlocker/{features,send-your-first-request}`.
 
-Ключей Bright Data у проекта нет — **живых измерений нет**.
+**Ключ проверен 2026-08-19; зоны на аккаунте нет — NOT LIVE VERIFIED.**
+
+```
+status: active   customer: hl_cf250d7d
+can_make_requests: false
+auth_fail_reason: "zone_not_found"
+```
+
+`get_active_zones` возвращает пустой список. Web Unlocker без зоны не работает,
+а создание зоны — необратимое действие, влияющее на биллинг, поэтому я её не
+создавал. Зону нужно создать в панели Bright Data.
+
+### Что нашлось даже без зоны
+
+**Bright Data сообщает свои ошибки через HTTP 200.** Запрос с несуществующей
+зоной приходит как `200`, пустое тело, и заголовок:
+
+```
+x-brd-err-code: client_10002
+x-brd-err-msg: Authentication failed: zone not found...
+```
+
+Адаптер смотрел только на статус — он принял бы это за **успешную выборку
+пустой страницы**, триаж вынес бы `THIN_CONTENT`, и факт о **нашей
+конфигурации** был бы записан как факт о **сайте**. Это ровно та подмена,
+которую контракт провайдеров и существует, чтобы предотвращать.
+
+Исправлено: заголовки `x-brd-err-*` проверяются **до** статуса, и ошибка
+зоны даёт `AUTH` — предохранитель провайдера открывается и ждёт человека.
 
 ## Роль
 

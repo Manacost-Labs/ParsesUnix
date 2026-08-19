@@ -303,21 +303,44 @@ _RENDERING_ANSWERS = frozenset({Verdict.CSR_REQUIRED, Verdict.SOFT_BLOCK})
 
 
 def _strategy_is_appropriate(strategy: ProviderStrategy, verdict: Verdict | None) -> bool:
-    """Is this strategy even the right tool for the failure we saw?
+    """Is this strategy the right tool for the failure we saw?
 
-    Paying for a capability that cannot address the observed failure is how a
-    budget disappears without anything improving.
+    Appropriate when **at least one** of its capabilities addresses the verdict.
+    An earlier version required *every* capability to be relevant, which
+    rejected any strategy that could do more than one thing: a mode combining a
+    premium network with rendering was refused for BLOCKED — the very verdict
+    its premium network exists to answer — because it also happened to render.
+
+    That made every Firecrawl mode unreachable for BLOCKED, the most common paid
+    escalation verdict, so the provider was configured, priced, tested and
+    permanently unused. A live end-to-end call is what exposed it.
+
+    A strategy with no special capability is a plain fetch and is appropriate
+    for anything; paying for a capability that cannot address the observed
+    failure is still how a budget disappears with nothing improving.
     """
 
     if verdict is None:
         return True
-    if strategy.premium_network and verdict not in _PREMIUM_NETWORK_ANSWERS:
-        return False
-    return not (strategy.renders_javascript and verdict not in _RENDERING_ANSWERS)
+
+    capabilities = (strategy.premium_network, strategy.renders_javascript)
+    if not any(capabilities):
+        return True  # a plain fetch through someone else's address
+
+    helps = (strategy.premium_network and verdict in _PREMIUM_NETWORK_ANSWERS) or (
+        strategy.renders_javascript and verdict in _RENDERING_ANSWERS
+    )
+    return bool(helps)
 
 
 def _inappropriate_reason(strategy: ProviderStrategy, verdict: Verdict | None) -> str:
+    """Why none of this strategy's capabilities answer the observed failure."""
+
     name = verdict.value if verdict else "?"
-    if strategy.premium_network and verdict not in _PREMIUM_NETWORK_ANSWERS:
-        return f"a premium network does not address {name}"
-    return f"rendering does not address {name}"
+    powers = []
+    if strategy.premium_network:
+        powers.append("a premium network")
+    if strategy.renders_javascript:
+        powers.append("rendering")
+    listed = " nor ".join(powers) if powers else "this strategy"
+    return f"{listed} does not address {name}"

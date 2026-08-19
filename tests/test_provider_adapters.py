@@ -275,3 +275,110 @@ class StrategyIdentityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BrightDataErrorHeaderTests(unittest.TestCase):
+    """MEASURED: Bright Data reports its own failures with HTTP 200.
+
+    A request naming a zone that does not exist comes back 200, empty body, and
+    `x-brd-err-code: client_10002`. An adapter reading only the status would
+    call that a successful fetch of an empty page; triage would call it
+    THIN_CONTENT; and a fact about OUR configuration would be filed as a fact
+    about the SITE. Only a live call surfaced it.
+    """
+
+    def provider(self, headers, body=b""):
+        return BrightDataProvider(
+            api_key="k", zone="z", opener=FakeHTTP(status=200, body=body, headers=headers)
+        )
+
+    def request(self):
+        return ProviderRequest(url=URL, strategy_id="unlocker")
+
+    def test_a_200_with_an_error_header_is_not_a_successful_fetch(self) -> None:
+        provider = self.provider(
+            {
+                "x-brd-err-code": "client_10002",
+                "x-brd-err-msg": "Authentication failed: zone not found",
+            }
+        )
+        with self.assertRaises(ProviderError) as caught:
+            provider.fetch(self.request())
+        self.assertEqual(caught.exception.kind, ProviderErrorKind.AUTH)
+
+    def test_a_zone_problem_needs_a_human_not_a_retry(self) -> None:
+        # AUTH opens the provider breaker and waits for a person: no retry helps
+        # and no other strategy fares better when the zone does not exist.
+        provider = self.provider({"x-brd-err-code": "client_10002", "x-brd-err-msg": "zone"})
+        with self.assertRaises(ProviderError) as caught:
+            provider.fetch(self.request())
+        self.assertFalse(caught.exception.retryable)
+
+    def test_an_unrecognised_error_code_is_a_provider_fault(self) -> None:
+        # Never a target verdict: an error header means the vendor did not
+        # reach the target on our terms, whatever else it says.
+        provider = self.provider({"x-brd-err-code": "server_9999", "x-brd-err-msg": "boom"})
+        with self.assertRaises(ProviderError) as caught:
+            provider.fetch(self.request())
+        self.assertEqual(caught.exception.kind, ProviderErrorKind.PROVIDER_FAULT)
+
+    def test_the_error_message_reaches_the_operator(self) -> None:
+        provider = self.provider(
+            {"x-brd-err-code": "client_10002", "x-brd-err-msg": "zone is disabled or deleted"}
+        )
+        with self.assertRaises(ProviderError) as caught:
+            provider.fetch(self.request())
+        self.assertIn("disabled or deleted", caught.exception.message)
+
+    def test_a_clean_response_still_succeeds(self) -> None:
+        provider = self.provider({"content-type": "text/html"}, body=b"<html>ok</html>")
+        response = provider.fetch(self.request())
+        self.assertEqual(response.body, b"<html>ok</html>")
+
+
+class FirecrawlCostLocationTests(unittest.TestCase):
+    """MEASURED: Firecrawl reports cost in the BODY, never in a header.
+
+    An earlier version guessed at header names that do not exist, so every call
+    settled as unattributed spend.
+    """
+
+    def envelope(self, **metadata):
+        base = {"statusCode": 200, "url": URL, "contentType": "text/html"}
+        base.update(metadata)
+        return json.dumps(
+            {"success": True, "data": {"rawHtml": "<html>x</html>", "metadata": base}}
+        ).encode()
+
+    def test_credits_are_read_from_metadata(self) -> None:
+        http = FakeHTTP(body=self.envelope(creditsUsed=1))
+        response = FirecrawlProvider(api_key="k", opener=http).fetch(
+            ProviderRequest(url=URL, strategy_id="basic")
+        )
+        self.assertTrue(response.cost.attributed)
+        self.assertEqual(response.cost.credits, Decimal("1"))
+
+    def test_a_missing_credits_field_is_still_unknown_not_zero(self) -> None:
+        http = FakeHTTP(body=self.envelope())
+        response = FirecrawlProvider(api_key="k", opener=http).fetch(
+            ProviderRequest(url=URL, strategy_id="basic")
+        )
+        self.assertFalse(response.cost.attributed)
+
+    def test_the_proxy_actually_used_is_recorded(self) -> None:
+        # Relevant for `auto`, which is documented to escalate without saying
+        # what the escalation costs.
+        http = FakeHTTP(body=self.envelope(creditsUsed=1, proxyUsed="stealth"))
+        response = FirecrawlProvider(api_key="k", opener=http).fetch(
+            ProviderRequest(url=URL, strategy_id="enhanced")
+        )
+        self.assertEqual(response.detected_defense, "stealth")
+
+    def test_the_cached_strategy_actually_asks_for_a_cache(self) -> None:
+        # An earlier default of 0 made it identical to a live fetch: it named a
+        # behaviour it did not have.
+        provider = FirecrawlProvider(api_key="k", opener=FakeHTTP(body=self.envelope()))
+        cached = provider.build_payload(ProviderRequest(url=URL, strategy_id="cached"))
+        live = provider.build_payload(ProviderRequest(url=URL, strategy_id="basic"))
+        self.assertGreater(cached["maxAge"], 0)
+        self.assertEqual(live["maxAge"], 0)

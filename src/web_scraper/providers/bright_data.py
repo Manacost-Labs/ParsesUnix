@@ -46,6 +46,26 @@ from web_scraper.providers.base import (
 )
 
 API_ENDPOINT = "https://api.brightdata.com/request"
+
+#: MEASURED 2026-08-19. Bright Data reports its own failures with **HTTP 200**
+#: and an error header, not with an error status. A request naming a zone that
+#: does not exist comes back 200, empty body, ``x-brd-err-code: client_10002``.
+#:
+#: An adapter that only looked at the status would read that as a successful
+#: fetch of an empty page, triage would call it THIN_CONTENT, and a verdict
+#: about OUR configuration would be recorded as a verdict about the SITE. That
+#: is precisely the confusion the provider contract exists to prevent, and only
+#: a live call surfaced it.
+HEADER_ERROR_CODE = "x-brd-err-code"
+HEADER_ERROR_MESSAGE = "x-brd-err-msg"
+HEADER_ERROR = "x-brd-error"
+
+#: Error-code families, from the codes observed and the vendor's numbering.
+#: Anything unrecognised is a provider fault rather than a target verdict,
+#: because an error header means the vendor never reached the target on our
+#: terms — whatever else it says.
+_AUTH_CODES = ("client_1000", "client_1001", "client_1002")
+_QUOTA_CODES = ("client_2000", "client_2001")
 PROVIDER_NAME = "brightdata"
 
 #: Date the live documentation was last read end to end.
@@ -196,6 +216,9 @@ class BrightDataProvider:
             timeout_seconds=request.timeout_seconds,
             opener=self._opener,
         )
+        # Checked BEFORE the status, because the vendor reports its own failures
+        # with a 200 and an error header.
+        self._raise_for_error_header(result.headers)
         self._raise_for_provider_failure(result.status, result.body)
 
         # format=raw returns the target document itself, so the envelope status
@@ -222,6 +245,33 @@ class BrightDataProvider:
             content_age_seconds=None,
             truncated=result.truncated,
             detected_defense=result.headers.get("x-brd-detected-protection"),
+        )
+
+    def _raise_for_error_header(self, headers: dict[str, str]) -> None:
+        """Turn an ``x-brd-err-*`` header into a provider error, never a verdict."""
+
+        code = headers.get(HEADER_ERROR_CODE)
+        if not code:
+            return
+        message = headers.get(HEADER_ERROR_MESSAGE) or headers.get(HEADER_ERROR) or "provider error"
+        if code.startswith(_AUTH_CODES):
+            # Includes zone-not-found. No retry helps and no other strategy
+            # fares better: this needs a human to fix the configuration.
+            raise ProviderError(
+                kind=ProviderErrorKind.AUTH, message=f"{code}: {message}", provider=self.name
+            )
+        if code.startswith(_QUOTA_CODES):
+            raise ProviderError(
+                kind=ProviderErrorKind.QUOTA,
+                message=f"{code}: {message}",
+                provider=self.name,
+                retryable=True,
+            )
+        raise ProviderError(
+            kind=ProviderErrorKind.PROVIDER_FAULT,
+            message=f"{code}: {message}",
+            provider=self.name,
+            retryable=True,
         )
 
     def _raise_for_provider_failure(self, status: int, body: bytes) -> None:

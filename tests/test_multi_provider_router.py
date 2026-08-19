@@ -456,3 +456,66 @@ class EvidenceDecayTests(RouterCase):
         decision = router.choose(domain=DOMAIN, url_class=URL_CLASS, verdict=Verdict.BLOCKED)
         self.assertFalse(decision.chosen, "year-old proof is not proof today")
         self.assertIn("evidence", decision.candidates[0].reason)
+
+
+class CapabilityMatchingTests(unittest.TestCase):
+    """A strategy is appropriate when ONE of its capabilities answers the verdict.
+
+    An earlier rule required every capability to be relevant, which rejected any
+    strategy that could do more than one thing. A mode combining a premium
+    network with rendering was refused for BLOCKED — the very verdict its
+    premium network exists to answer — because it also happened to render.
+
+    That made every Firecrawl mode unreachable for BLOCKED, the most common paid
+    escalation verdict: the provider was configured, priced, tested and
+    permanently unused. A live end-to-end call exposed it, not the suite.
+    """
+
+    def strategy(self, *, premium: bool, renders: bool) -> ProviderStrategy:
+        return ProviderStrategy(
+            id="s",
+            nominal_cost=Decimal("1"),
+            premium_network=premium,
+            renders_javascript=renders,
+        )
+
+    def appropriate(self, verdict, *, premium, renders) -> bool:
+        from web_scraper.providers.router import _strategy_is_appropriate
+
+        return _strategy_is_appropriate(self.strategy(premium=premium, renders=renders), verdict)
+
+    def test_a_combined_strategy_is_usable_for_a_block(self) -> None:
+        # The regression. Its premium network answers BLOCKED; the fact that it
+        # also renders is irrelevant, not disqualifying.
+        self.assertTrue(self.appropriate(Verdict.BLOCKED, premium=True, renders=True))
+
+    def test_a_combined_strategy_is_usable_for_a_csr_page(self) -> None:
+        self.assertTrue(self.appropriate(Verdict.CSR_REQUIRED, premium=True, renders=True))
+
+    def test_rendering_alone_still_does_not_answer_a_block(self) -> None:
+        # Paying five credits to be refused again is the waste the rule exists
+        # to prevent, and it is still prevented.
+        self.assertFalse(self.appropriate(Verdict.BLOCKED, premium=False, renders=True))
+
+    def test_a_premium_network_alone_does_not_answer_a_csr_page(self) -> None:
+        self.assertFalse(self.appropriate(Verdict.CSR_REQUIRED, premium=True, renders=False))
+
+    def test_a_plain_fetch_is_appropriate_for_anything(self) -> None:
+        for verdict in (Verdict.BLOCKED, Verdict.SOFT_BLOCK, Verdict.CSR_REQUIRED):
+            with self.subTest(verdict=verdict):
+                self.assertTrue(self.appropriate(verdict, premium=False, renders=False))
+
+    def test_every_firecrawl_premium_mode_can_serve_a_block(self) -> None:
+        from web_scraper.providers.firecrawl import AUTO, ENHANCED
+        from web_scraper.providers.router import _strategy_is_appropriate
+
+        for strategy in (AUTO, ENHANCED):
+            with self.subTest(strategy=strategy.id):
+                self.assertTrue(_strategy_is_appropriate(strategy, Verdict.BLOCKED))
+
+    def test_the_reason_names_every_capability_that_failed(self) -> None:
+        from web_scraper.providers.router import _inappropriate_reason
+
+        reason = _inappropriate_reason(self.strategy(premium=False, renders=True), Verdict.BLOCKED)
+        self.assertIn("rendering", reason)
+        self.assertIn("BLOCKED", reason)

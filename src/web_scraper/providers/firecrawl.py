@@ -50,11 +50,29 @@ DOCS_VERIFIED_AT = "2026-08-19"
 #: checkable rather than folklore.
 DOCUMENTED_DEFAULT_MAX_AGE_MS = 172_800_000
 
+#: What the ``cached`` strategy asks for. An earlier version defaulted this to
+#: zero, which made the cache strategy identical to a live fetch — it named a
+#: behaviour it did not have. One hour is short enough that a consumer is
+#: unlikely to be misled and long enough to be worth having, and the answer is
+#: still marked freshness-unprovable regardless.
+DEFAULT_CACHE_MAX_AGE_MS = 3_600_000
+
 #: Documented list price. Not a measurement of what any given call costs.
 DOCUMENTED_CREDITS_PER_PAGE = Decimal("1")
 
-#: Header names are NOT documented. These are tried opportunistically; when none
-#: is present the cost is unattributed, which is the honest answer.
+#: MEASURED 2026-08-19 against the live API: Firecrawl reports cost in the
+#: response BODY, at ``data.metadata.creditsUsed``, and sends no cost header at
+#: all. An earlier version of this adapter guessed at header names that do not
+#: exist, so every call settled as unattributed — the exact failure that live
+#: verification is for.
+METADATA_COST_KEY = "creditsUsed"
+
+#: Also measured: which proxy pool actually served the request. It matters for
+#: the ``auto`` mode, which is documented to escalate to the enhanced pool
+#: without publishing what that costs.
+METADATA_PROXY_KEY = "proxyUsed"
+
+#: Kept as a fallback only. No header carrying cost was observed in practice.
 CANDIDATE_COST_HEADERS = ("x-credits-used", "x-firecrawl-credits-used")
 CANDIDATE_REMAINING_HEADERS = ("x-credits-remaining", "x-firecrawl-credits-remaining")
 
@@ -113,7 +131,7 @@ class FirecrawlProvider:
         api_key: str | None = None,
         token_env: str = "FIRECRAWL_API_KEY",  # noqa: S107 - a variable NAME, not a secret
         endpoint: str = API_ENDPOINT,
-        cache_max_age_ms: int = 0,
+        cache_max_age_ms: int = DEFAULT_CACHE_MAX_AGE_MS,
         opener: Opener | None = None,
     ) -> None:
         # Env-only by default, like every other credential in this project: a
@@ -210,8 +228,9 @@ class FirecrawlProvider:
             headers=_content_headers(metadata),
             final_url=str(metadata.get("url") or metadata.get("sourceURL") or request.url),
             latency_ms=result.latency_ms,
-            cost=_cost_from(result.headers),
-            request_id=result.headers.get("x-request-id"),
+            cost=_cost_from(result.headers, metadata),
+            request_id=str(metadata.get("scrapeId") or "") or None,
+            detected_defense=str(metadata.get(METADATA_PROXY_KEY) or "") or None,
             # Firecrawl documents no field stating the age of a cached body, so
             # a cache-eligible call can never prove freshness. Saying "unknown"
             # keeps a stale record from being published as current.
@@ -262,8 +281,18 @@ class FirecrawlProvider:
             )
 
 
-def _cost_from(headers: dict[str, str]) -> ProviderCost:
-    """Firecrawl documents no cost header; try, then admit ignorance."""
+def _cost_from(headers: dict[str, str], metadata: dict[str, Any]) -> ProviderCost:
+    """Read the reported cost from where Firecrawl actually puts it.
+
+    The body, not a header. Measured against the live API on 2026-08-19: the
+    response carries ``data.metadata.creditsUsed`` and no cost header. The
+    header lookup below survives only as a fallback in case that changes; it has
+    never been observed to fire.
+    """
+
+    reported = metadata.get(METADATA_COST_KEY)
+    if reported is not None:
+        return ProviderCost.parse(reported)
 
     for name in CANDIDATE_COST_HEADERS:
         if name in headers:

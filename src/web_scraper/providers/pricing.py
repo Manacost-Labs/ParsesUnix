@@ -146,10 +146,16 @@ SCRAPE_DO = PricingSnapshot(
     },
 )
 
-#: Firecrawl: "1 credit per page" is published, but the documentation also says
-#: advanced features cost more WITHOUT a per-mode table, and documents no cost
-#: response header. So the plain modes get a defensible ceiling and the ones
-#: whose behaviour can multiply calls do not.
+#: Firecrawl: MEASURED against the live API on 2026-08-19 on an easy target
+#: (books.toscrape.com). Every mode reported exactly 1 credit, including
+#: ``enhanced``, which served the request from the "stealth" pool. Cost arrives
+#: in the response BODY at ``data.metadata.creditsUsed``, never in a header.
+#:
+#: The measurement does NOT generalise. One easy page says nothing about what
+#: the stealth pool charges on a target that actually fights back, and the
+#: vendor publishes no per-mode table. ``auto`` and ``enhanced`` therefore stay
+#: non-deterministic: their reported cost is used when present, and an
+#: unreported one is UNKNOWN rather than assumed to be 1.
 FIRECRAWL = PricingSnapshot(
     provider="firecrawl",
     native_unit="credits",
@@ -161,27 +167,33 @@ FIRECRAWL = PricingSnapshot(
             Decimal("1"),
             Decimal("0.00083"),
             deterministic=True,
-            note="documented 1 credit/page, no published multiplier for proxy=basic",
+            note="measured 1 credit on 2026-08-19; documented 1 credit/page",
         ),
         "cached": StrategyRate(
             Decimal("1"),
             Decimal("0.00083"),
             deterministic=True,
-            note="cache hits are documented at the same or lower price",
+            note="measured 1 credit on a cache hit; ~2x faster than a live fetch",
         ),
         "auto": StrategyRate(
             Decimal("1"),
             Decimal("0.00083"),
             deterministic=False,
             native_upper_bound=Decimal("2"),
-            note="documented to retry on the enhanced pool; the multiplier is not published",
+            note=(
+                "measured 1 credit on an easy target, where it did not escalate; "
+                "the escalation multiplier is not published"
+            ),
         ),
         "enhanced": StrategyRate(
             Decimal("1"),
             Decimal("0.00083"),
             deterministic=False,
             native_upper_bound=Decimal("2"),
-            note="advanced features documented to cost more, without a table",
+            note=(
+                "measured 1 credit on an easy target via the stealth pool; what a "
+                "hard target costs is not published and was not measured"
+            ),
         ),
     },
 )
