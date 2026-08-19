@@ -110,12 +110,17 @@ def default_transport_provider(
     timeout: float = 20.0,
     session_clock: Callable[[], float] = time.monotonic,
     browser_pool: BrowserPool | None = None,
+    browser_worker: Any = None,
 ) -> TransportProvider:
     """L0 -> plain urllib, L1 -> per-domain cookie session, L2 -> browser.
 
-    Pass a ``browser_pool`` for any run that renders more than a page or two:
-    without it every L2 fetch launches Chromium, which dominates the cost of a
-    JavaScript-heavy crawl.
+    Pass a ``browser_worker`` for any concurrent run. Sync Playwright objects
+    belong to the greenlet that created them, so a pool shared across worker
+    threads raises ``greenlet.error`` — measured, not assumed. The worker owns
+    its pool on one dedicated thread.
+
+    ``browser_pool`` remains for single-threaded callers (a probe, a test),
+    where the extra thread buys nothing.
     """
 
     shared_l0 = UrllibTransport(
@@ -149,6 +154,7 @@ def default_transport_provider(
                 resolver=resolver,
                 timeout=max(timeout, 30.0),
                 pool=browser_pool,
+                worker=browser_worker,
             )
         raise TransportUnavailable(
             "paid levels are handled by provider adapters (stage 3), not the free gateway"

@@ -25,6 +25,7 @@ from web_scraper.contracts import Result, Verdict
 from web_scraper.extract import extract_fields, run_quorum
 from web_scraper.fetchers import CircuitBreaker, FetchGateway, RawResponse
 from web_scraper.fetchers.browser_pool import BrowserPool
+from web_scraper.fetchers.browser_worker import BrowserWorker
 from web_scraper.fetchers.gateway import GatewayOutcome, default_transport_provider
 from web_scraper.fingerprints import FingerprintStore
 from web_scraper.finops.canary import CanaryStatus, PaidCanary
@@ -107,14 +108,24 @@ class Runner:
         self.metrics = RunMetrics()
         self._clock = clock
         self._wall_clock = wall_clock
-        # One browser for the whole run, shut down in run(). An injected gateway
-        # brings its own transports, so the runner does not build a pool for it.
-        self._browser_pool: BrowserPool | None = None
+        # One browser for the whole run, owned by a dedicated thread and shut
+        # down in run(). The runner must NOT hold the pool itself: sync
+        # Playwright objects belong to the greenlet that created them, and a
+        # pool reachable from the run loop is a pool that will eventually be
+        # touched from the wrong thread. An injected gateway brings its own
+        # transports, so the runner builds nothing for it.
+        self._browser: BrowserWorker | None = None
         if gateway is None and config.browser_pool:
-            self._browser_pool = BrowserPool(max_contexts=config.max_browser_contexts)
+            contexts = config.max_browser_contexts
+            self._browser = BrowserWorker(
+                pool_factory=lambda: BrowserPool(max_contexts=contexts),
+                # The queue is bounded so a fast HTTP loop cannot pile up
+                # unbounded render jobs behind one browser.
+                queue_size=max(config.batch_size * 2, 4),
+            ).start()
         self._gateway = gateway or FetchGateway(
             self.profile,
-            transport_provider=default_transport_provider(browser_pool=self._browser_pool),
+            transport_provider=default_transport_provider(browser_worker=self._browser),
             snapshots=self.snapshots,
             breaker=CircuitBreaker(),
             route_stats=self.route_stats,
@@ -177,7 +188,7 @@ class Runner:
         self._escalator = escalator
         return FetchGateway(
             self.profile,
-            transport_provider=default_transport_provider(browser_pool=self._browser_pool),
+            transport_provider=default_transport_provider(browser_worker=self._browser),
             snapshots=self.snapshots,
             breaker=CircuitBreaker(),
             route_stats=self.route_stats,
@@ -557,11 +568,21 @@ class Runner:
             )
 
     def _close_browser_pool(self) -> None:
-        if self._browser_pool is None:
+        """Shut the browser thread down deterministically, keeping its metrics.
+
+        Metrics are read before the close, not after: a worker that has been
+        shut down has nothing to report, and a run that leaves Chromium behind
+        because reporting raised is worse than one with no browser numbers.
+        """
+
+        if self._browser is None:
             return
-        self.metrics.browser = self._browser_pool.metrics.to_dict()
-        self._browser_pool.close()
-        self._browser_pool = None
+        self.metrics.browser = {
+            **self._browser.metrics.to_dict(),
+            **self._browser.pool_metrics,
+        }
+        self._browser.close()
+        self._browser = None
 
     def _run_sweep(self) -> None:
         """Phase-A HEAD sweep: quarantine 404/410 before the main pass."""

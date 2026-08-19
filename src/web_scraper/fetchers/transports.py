@@ -13,8 +13,8 @@ import http.cookiejar
 import logging
 import socket
 import time
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Callable, Mapping
+from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPCookieProcessor, Request
@@ -154,13 +154,37 @@ class UrllibTransport:
         )
 
 
+class BrowserWorkerLike(Protocol):
+    """What a render transport needs from a browser owner.
+
+    A protocol rather than the concrete class so this module does not import the
+    worker, which imports the pool: the dependency runs one way only.
+    """
+
+    def submit(
+        self, work: Callable[[BrowserPool], RawResponse], *, timeout: float | None = ...
+    ) -> RawResponse: ...
+
+
 class PlaywrightRenderTransport:
     """L2 dynamic rendering.
 
-    Pass a :class:`~web_scraper.fetchers.browser_pool.BrowserPool` to reuse one
-    browser across pages; measured on this machine that is ~5x faster per page
-    than launching Chromium each time. Without a pool the transport still works
-    standalone, which keeps single-shot use (a probe, a test) simple.
+    Three ways to get a browser, in descending order of how much you should
+    prefer them in a real run:
+
+    ``worker``
+        A :class:`~web_scraper.fetchers.browser_worker.BrowserWorker`. **The
+        production path.** Sync Playwright objects belong to the greenlet that
+        created them, so a pool touched from a worker thread raises
+        ``greenlet.error``. The worker owns its pool on a dedicated thread and
+        accepts work through a bounded queue, which is the only arrangement that
+        survives concurrency.
+    ``pool``
+        A pool used directly. Correct only when the caller is single-threaded —
+        a probe, a test, a one-shot script.
+    neither
+        Launch a browser per page. Roughly 5x slower per page as measured on
+        this machine, but it keeps single-shot use trivial.
     """
 
     def __init__(
@@ -171,12 +195,14 @@ class PlaywrightRenderTransport:
         timeout: float = 30.0,
         headless: bool = True,
         pool: BrowserPool | None = None,
+        worker: BrowserWorkerLike | None = None,
     ) -> None:
         self.allow_private = allow_private
         self.resolver = resolver
         self.timeout = timeout
         self.headless = headless
         self.pool = pool
+        self.worker = worker
 
     def _guard_route(self, route: Any) -> None:  # pragma: no cover - needs a live browser
         # Abort any request (navigation or subresource) to a non-public host, so
@@ -190,6 +216,12 @@ class PlaywrightRenderTransport:
 
     def fetch(self, url: str, *, headers: Mapping[str, str] | None = None) -> RawResponse:
         validate_public_url(url, allow_private=self.allow_private, resolver=self.resolver)
+        if self.worker is not None:
+            # Hand the work to the thread that owns the browser. Nothing about
+            # the pool is touched from here.
+            return self.worker.submit(
+                lambda pool: self._render_with(pool, url), timeout=self.timeout * 2
+            )
         if self.pool is not None:
             return self._fetch_pooled(url)
         try:
@@ -231,17 +263,24 @@ class PlaywrightRenderTransport:
         )
 
     def _fetch_pooled(self, url: str) -> RawResponse:  # pragma: no cover - live browser
-        """Render through the shared pool: one page, no browser launch."""
+        """Render through a pool this caller owns. Single-threaded callers only."""
 
         assert self.pool is not None
+        return self._render_with(self.pool, url)
+
+    def _render_with(  # pragma: no cover - live browser
+        self, pool: BrowserPool, url: str
+    ) -> RawResponse:
+        """The actual rendering, run wherever the pool lives."""
+
         started = time.monotonic()
         domain = urlsplit(url).netloc
-        with self.pool.page(domain) as page:
+        with pool.page(domain) as page:
             page.context.route("**/*", self._guard_route)
             try:
                 response = page.goto(url, timeout=self.timeout * 1000)
             except Exception as exc:
-                self.pool.metrics.navigation_timeouts += 1
+                pool.metrics.navigation_timeouts += 1
                 raise TransportUnavailable(f"browser navigation failed: {exc}") from exc
             validate_public_url(page.url, allow_private=self.allow_private, resolver=self.resolver)
             try:
