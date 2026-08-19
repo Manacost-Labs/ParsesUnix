@@ -42,6 +42,8 @@ class RunMetrics:
     route_stats: list[dict[str, Any]] = field(default_factory=list)
     #: Fresh vs merely-available share of the published dataset (see publish.availability).
     availability: dict[str, Any] = field(default_factory=dict)
+    #: Browser pool health for the run (see fetchers.browser_pool).
+    browser: dict[str, Any] = field(default_factory=dict)
 
     def observe(
         self,
@@ -93,6 +95,7 @@ class RunMetrics:
             "per_domain": dict(self.per_domain),
             "route_stats": self.route_stats,
             "availability": self.availability,
+            "browser": self.browser,
         }
 
 

@@ -20,7 +20,8 @@ from typing import Any
 from web_scraper.contracts import Result, Verdict
 from web_scraper.extract import extract_fields, run_quorum
 from web_scraper.fetchers import CircuitBreaker, FetchGateway, RawResponse
-from web_scraper.fetchers.gateway import GatewayOutcome
+from web_scraper.fetchers.browser_pool import BrowserPool
+from web_scraper.fetchers.gateway import GatewayOutcome, default_transport_provider
 from web_scraper.fingerprints import FingerprintStore
 from web_scraper.freshness import FreshnessStore
 from web_scraper.observability import Alerter, AlertEvent, LoggingAlerter, RunMetrics
@@ -72,8 +73,14 @@ class Runner:
         self.metrics = RunMetrics()
         self._clock = clock
         self._wall_clock = wall_clock
+        # One browser for the whole run, shut down in run(). An injected gateway
+        # brings its own transports, so the runner does not build a pool for it.
+        self._browser_pool: BrowserPool | None = None
+        if gateway is None and config.browser_pool:
+            self._browser_pool = BrowserPool(max_contexts=config.max_browser_contexts)
         self._gateway = gateway or FetchGateway(
             self.profile,
+            transport_provider=default_transport_provider(browser_pool=self._browser_pool),
             snapshots=self.snapshots,
             breaker=CircuitBreaker(),
             route_stats=self.route_stats,
@@ -125,6 +132,10 @@ class Runner:
                 self._process_guarded(queued)
                 processed += 1
 
+        # The browser is released before reporting: a run must not leave a
+        # Chromium behind because report building raised.
+        self._close_browser_pool()
+
         promote = self._promote()
         accounting = build_accounting(self.queue.counts_by_status(), seeded_urls=seeded)
         if not accounting.is_complete:
@@ -147,6 +158,13 @@ class Runner:
         )
         self._final_alerts(report.to_dict(), promote)
         return RunResult(report=report.to_dict(), promote=promote, processed=processed)
+
+    def _close_browser_pool(self) -> None:
+        if self._browser_pool is None:
+            return
+        self.metrics.browser = self._browser_pool.metrics.to_dict()
+        self._browser_pool.close()
+        self._browser_pool = None
 
     def _run_sweep(self) -> None:
         """Phase-A HEAD sweep: quarantine 404/410 before the main pass."""

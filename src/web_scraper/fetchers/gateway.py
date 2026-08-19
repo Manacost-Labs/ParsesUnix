@@ -39,6 +39,7 @@ from web_scraper.contracts import (
     Verdict,
 )
 from web_scraper.fetchers.base import RawResponse, Transport, TransportUnavailable
+from web_scraper.fetchers.browser_pool import BrowserPool
 from web_scraper.fetchers.circuit import CircuitBreaker
 from web_scraper.fetchers.pacing import Pacer, parse_retry_after
 from web_scraper.fetchers.sessions import SessionPool
@@ -101,8 +102,14 @@ def default_transport_provider(
     resolver: Resolver = socket.getaddrinfo,
     timeout: float = 20.0,
     session_clock: Callable[[], float] = time.monotonic,
+    browser_pool: BrowserPool | None = None,
 ) -> TransportProvider:
-    """L0 -> plain urllib, L1 -> per-domain cookie session, L2 -> browser."""
+    """L0 -> plain urllib, L1 -> per-domain cookie session, L2 -> browser.
+
+    Pass a ``browser_pool`` for any run that renders more than a page or two:
+    without it every L2 fetch launches Chromium, which dominates the cost of a
+    JavaScript-heavy crawl.
+    """
 
     shared_l0 = UrllibTransport(
         allow_private=allow_private, resolver=resolver, timeout=timeout, use_cookies=False
@@ -131,7 +138,10 @@ def default_transport_provider(
             if route.type is RouteType.STEALTHY:
                 return ScraplingStealthyTransport()
             return PlaywrightRenderTransport(
-                allow_private=allow_private, resolver=resolver, timeout=max(timeout, 30.0)
+                allow_private=allow_private,
+                resolver=resolver,
+                timeout=max(timeout, 30.0),
+                pool=browser_pool,
             )
         raise TransportUnavailable(
             "paid levels are handled by provider adapters (stage 3), not the free gateway"

@@ -26,6 +26,10 @@ class RunConfig:
     sweep: bool = False  # phase-A HEAD sweep to quarantine dead URLs before the main pass
     #: Let past runs reorder the profile's routes. Off reproduces the declared ladder.
     adaptive_routing: bool = True
+    #: Share one browser across the run instead of launching per URL.
+    browser_pool: bool = True
+    #: Concurrent domain contexts; each costs memory even when idle.
+    max_browser_contexts: int = 4
 
     @property
     def queue_path(self) -> Path:
@@ -75,4 +79,6 @@ class RunConfig:
             dead_zone_after_attempts=int(data.get("dead_zone_after_attempts", 3)),
             sweep=bool(data.get("sweep", False)),
             adaptive_routing=bool(data.get("adaptive_routing", True)),
+            browser_pool=bool(data.get("browser_pool", True)),
+            max_browser_contexts=int(data.get("max_browser_contexts", 4)),
         )

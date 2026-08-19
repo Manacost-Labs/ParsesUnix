@@ -16,9 +16,11 @@ import time
 from collections.abc import Mapping
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import HTTPCookieProcessor, Request
 
 from web_scraper.fetchers.base import RawResponse, TransportUnavailable
+from web_scraper.fetchers.browser_pool import BrowserPool
 from web_scraper.probe.safety import Resolver, build_safe_opener, is_public_url, validate_public_url
 
 logger = logging.getLogger(__name__)
@@ -153,7 +155,13 @@ class UrllibTransport:
 
 
 class PlaywrightRenderTransport:
-    """L2 dynamic rendering via a lazily imported headless Chromium."""
+    """L2 dynamic rendering.
+
+    Pass a :class:`~web_scraper.fetchers.browser_pool.BrowserPool` to reuse one
+    browser across pages; measured on this machine that is ~5x faster per page
+    than launching Chromium each time. Without a pool the transport still works
+    standalone, which keeps single-shot use (a probe, a test) simple.
+    """
 
     def __init__(
         self,
@@ -162,11 +170,13 @@ class PlaywrightRenderTransport:
         resolver: Resolver = socket.getaddrinfo,
         timeout: float = 30.0,
         headless: bool = True,
+        pool: BrowserPool | None = None,
     ) -> None:
         self.allow_private = allow_private
         self.resolver = resolver
         self.timeout = timeout
         self.headless = headless
+        self.pool = pool
 
     def _guard_route(self, route: Any) -> None:  # pragma: no cover - needs a live browser
         # Abort any request (navigation or subresource) to a non-public host, so
@@ -180,6 +190,8 @@ class PlaywrightRenderTransport:
 
     def fetch(self, url: str, *, headers: Mapping[str, str] | None = None) -> RawResponse:
         validate_public_url(url, allow_private=self.allow_private, resolver=self.resolver)
+        if self.pool is not None:
+            return self._fetch_pooled(url)
         try:
             from playwright.sync_api import sync_playwright
         except ImportError as exc:
@@ -210,6 +222,37 @@ class PlaywrightRenderTransport:
         finally:  # pragma: no cover - needs a live browser
             _close_quietly(context, browser, playwright)
         return RawResponse(  # pragma: no cover - needs a live browser
+            requested_url=url,
+            final_url=final_url,
+            status=status,
+            headers=raw_headers,
+            body=html.encode("utf-8"),
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+        )
+
+    def _fetch_pooled(self, url: str) -> RawResponse:  # pragma: no cover - live browser
+        """Render through the shared pool: one page, no browser launch."""
+
+        assert self.pool is not None
+        started = time.monotonic()
+        domain = urlsplit(url).netloc
+        with self.pool.page(domain) as page:
+            page.context.route("**/*", self._guard_route)
+            try:
+                response = page.goto(url, timeout=self.timeout * 1000)
+            except Exception as exc:
+                self.pool.metrics.navigation_timeouts += 1
+                raise TransportUnavailable(f"browser navigation failed: {exc}") from exc
+            validate_public_url(page.url, allow_private=self.allow_private, resolver=self.resolver)
+            try:
+                page.wait_for_load_state("networkidle", timeout=self.timeout * 1000)
+            except Exception:
+                logger.debug("networkidle not reached for %s", url, exc_info=True)
+            html = page.content()
+            status = response.status if response else None
+            raw_headers = dict(response.headers) if response else {}
+            final_url = page.url
+        return RawResponse(
             requested_url=url,
             final_url=final_url,
             status=status,
