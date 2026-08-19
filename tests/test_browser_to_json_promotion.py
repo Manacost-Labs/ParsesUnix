@@ -491,3 +491,174 @@ class RunnerDiscoveryTests(unittest.TestCase):
         result = self.runner(count=8).run()
         self.assertEqual(result.report["metrics"]["paid_calls"], 0)
         self.assertEqual(result.report["metrics"]["cost_credits"], "0")
+
+
+class SavingsProofTests(unittest.TestCase):
+    """Run 1 renders and learns; run 2 reads the API. What actually changed?
+
+    The claim under test is narrow on purpose. A cheaper route that returns
+    different data is not an optimisation, so field agreement is asserted before
+    any saving is mentioned — and the saving that is mentioned is only the one
+    that was counted.
+    """
+
+    def setUp(self) -> None:
+        tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        self.state = Path(tempdir.name)
+        self.clock = [1_000_000.0]
+
+    def store(self):
+        from web_scraper.discovery import DiscoveryStore
+
+        return DiscoveryStore(self.state / "discovery.sqlite3", now=lambda: self.clock[0])
+
+    def learn_across_runs(self, runs: int = 3):
+        """Each iteration is a separate process observing different pages."""
+
+        from web_scraper.discovery import (
+            DiscoveryCollector,
+            ObservedRequest,
+        )
+
+        for run in range(runs):
+            collector = DiscoveryCollector(
+                min_pages=1,
+                wanted_fields=("title", "score"),
+                resolver=PUBLIC_RESOLVER,
+            )
+            page = f"https://csr-demo.example/players/{run}"
+            collector.observe(
+                ObservedRequest(
+                    url=API,
+                    method="GET",
+                    status=200,
+                    content_type="application/json",
+                    resource_type="xhr",
+                    body=API_BODY,
+                    page_url=page,
+                )
+            )
+            store = self.store()
+            for candidate in collector.candidates():
+                store.record(
+                    candidate,
+                    domain="csr-demo.example",
+                    url_class="player",
+                    source_pages=[page],
+                )
+        return self.store()
+
+    def test_evidence_only_validates_after_several_runs(self) -> None:
+        from web_scraper.discovery import EvidenceState
+
+        after_one = self.learn_across_runs(runs=1)
+        self.assertEqual(after_one.validated(), [], "one run is not evidence")
+
+        after_three = self.learn_across_runs(runs=3)
+        validated = after_three.validated()
+        self.assertEqual(len(validated), 1)
+        self.assertIs(validated[0].state, EvidenceState.VALIDATED)
+
+    def test_the_two_routes_agree_on_every_critical_field(self) -> None:
+        # Asserted BEFORE any saving is discussed.
+        from web_scraper.discovery import evidence_to_candidate, profile_route_draft
+
+        store = self.learn_across_runs()
+        draft = profile_route_draft(evidence_to_candidate(store.validated()[0]))
+
+        from_api, _ = extract_response(
+            API_BODY,
+            headers={"Content-Type": "application/json"},
+            extractors=[draft["extractor"]],
+            fields=["title", "score"],
+        )
+        from_browser, _ = extract_response(
+            RENDERED,
+            headers={"Content-Type": "text/html"},
+            extractors=[{"kind": "heuristic"}],
+            fields=["title"],
+        )
+        self.assertEqual(from_api.data["title"], from_browser.data["title"])
+        self.assertEqual(from_api.data["score"], 93)
+
+    def test_the_comparison_refuses_to_claim_an_unmeasured_saving(self) -> None:
+        from web_scraper.diagnose.routes import compare_routes
+
+        store = self.learn_across_runs()
+        comparison = compare_routes(store.all_evidence(), critical_fields=("title", "score"))[0]
+        self.assertIsNone(comparison.latency_saving_ms, "neither route was timed")
+        self.assertEqual(comparison.cost_saving, "UNKNOWN")
+        self.assertIn("no speed claim is made", comparison.recommendation)
+
+    def test_a_measured_saving_is_reported(self) -> None:
+        from web_scraper.diagnose.routes import RouteMeasurement, compare_routes
+
+        store = self.learn_across_runs()
+        comparison = compare_routes(
+            store.all_evidence(),
+            critical_fields=("title", "score"),
+            current=RouteMeasurement(label="L2 browser", samples=40, p50_ms=620, p95_ms=850),
+            candidate_measurements={
+                store.validated()[0].identity: RouteMeasurement(
+                    label="L0 json", samples=40, p50_ms=70, p95_ms=94
+                )
+            },
+            browser_renders=12,
+        )[0]
+        self.assertEqual(comparison.latency_saving_ms, 756)
+        self.assertIn("756 ms lower", comparison.recommendation)
+        self.assertIn("every critical field covered", comparison.recommendation)
+
+    def test_missing_critical_fields_block_the_recommendation(self) -> None:
+        # A cheaper route returning different data is not an optimisation.
+        from web_scraper.diagnose.routes import RouteMeasurement, compare_routes
+
+        store = self.learn_across_runs()
+        comparison = compare_routes(
+            store.all_evidence(),
+            critical_fields=("title", "score", "author"),
+            current=RouteMeasurement(label="L2", samples=10, p95_ms=900),
+        )[0]
+        self.assertFalse(comparison.fully_covers_fields)
+        self.assertIn("NOT READY", comparison.recommendation)
+        self.assertIn("2/3", comparison.field_coverage)
+
+    def test_a_degraded_endpoint_is_not_recommended(self) -> None:
+        from web_scraper.diagnose.routes import compare_routes
+        from web_scraper.discovery import EvidenceState
+
+        store = self.learn_across_runs()
+        identity = store.validated()[0].identity
+
+        # The endpoint changes shape. Yesterday's verdict does not carry over.
+        from web_scraper.discovery import DiscoveryCollector, ObservedRequest
+
+        collector = DiscoveryCollector(min_pages=1, resolver=PUBLIC_RESOLVER)
+        collector.observe(
+            ObservedRequest(
+                url=API,
+                method="GET",
+                status=200,
+                content_type="application/json",
+                resource_type="xhr",
+                body=json.dumps({"completely": {"different": True}}).encode(),
+                page_url="https://csr-demo.example/players/99",
+            )
+        )
+        for candidate in collector.candidates():
+            store.record(
+                candidate,
+                domain="csr-demo.example",
+                source_pages=["https://csr-demo.example/players/99"],
+            )
+
+        after = store.get(identity)
+        assert after is not None
+        self.assertIs(after.state, EvidenceState.REVALIDATION_REQUIRED)
+        self.assertEqual(compare_routes(store.all_evidence()), [], "not offered any more")
+
+    def test_evidence_survives_a_restart(self) -> None:
+        self.learn_across_runs()
+        restarted = self.store()
+        self.assertEqual(len(restarted.validated()), 1)
