@@ -212,6 +212,7 @@ def _raw_from_provider(url: str, response: ProviderResponse) -> RawResponse:
         headers=dict(response.headers),
         body=response.body,
         elapsed_ms=response.latency_ms,
+        truncated=response.truncated,
     )
 
 

@@ -220,6 +220,7 @@ class BrightDataProvider:
             # Web Unlocker fetches live; there is no documented content cache.
             from_cache=False,
             content_age_seconds=None,
+            truncated=result.truncated,
             detected_defense=result.headers.get("x-brd-detected-protection"),
         )
 

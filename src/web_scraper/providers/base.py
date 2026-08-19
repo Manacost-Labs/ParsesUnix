@@ -159,6 +159,10 @@ class ProviderResponse:
     #: Age of the returned content, when the provider states it. ``None`` means
     #: unprovable — see :attr:`freshness_provable`.
     content_age_seconds: float | None = None
+    #: True when the body hit our size ceiling. The bytes are a PREFIX, not the
+    #: document. Validation must not read a cut-off page as thin content, and a
+    #: canary missing from a prefix proves nothing about the whole.
+    truncated: bool = False
 
     @property
     def freshness_provable(self) -> bool:
@@ -192,6 +196,7 @@ class ProviderResponse:
             "cost": self.cost.to_dict(),
             "request_id": self.request_id,
             "detected_defense": self.detected_defense,
+            "truncated": self.truncated,
             "from_cache": self.from_cache,
             "content_age_seconds": self.content_age_seconds,
             "freshness_provable": self.freshness_provable,

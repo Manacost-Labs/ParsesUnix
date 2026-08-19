@@ -26,6 +26,7 @@ import urllib.request
 from decimal import Decimal
 from typing import Any, Protocol
 
+from web_scraper.providers._transport import DEFAULT_MAX_BODY_BYTES
 from web_scraper.providers.base import (
     ProviderCost,
     ProviderError,
@@ -101,12 +102,14 @@ class ScrapeDoProvider:
         token_env: str = "SCRAPE_DO_TOKEN",  # noqa: S107 - a variable NAME, not a secret
         endpoint: str = API_ENDPOINT,
         opener: _Opener | None = None,
+        max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
     ) -> None:
         # Never accept a token from a profile or a config file: those get
         # committed. Environment or explicit argument only.
         self._token = token or os.environ.get(token_env, "")
         self._endpoint = endpoint
         self._opener = opener
+        self._max_body_bytes = max_body_bytes
 
     @property
     def configured(self) -> bool:
@@ -162,11 +165,11 @@ class ScrapeDoProvider:
             ) as response:
                 status = int(response.status)
                 headers = {str(k).lower(): str(v) for k, v in response.headers.items()}
-                body = response.read()
+                body = response.read(self._max_body_bytes + 1)
         except urllib.error.HTTPError as exc:
             status = int(exc.code)
             headers = {str(k).lower(): str(v) for k, v in (exc.headers or {}).items()}
-            body = exc.read()
+            body = exc.read(self._max_body_bytes + 1)
         except TimeoutError as exc:
             raise ProviderError(
                 kind=ProviderErrorKind.TIMEOUT,
@@ -182,6 +185,9 @@ class ScrapeDoProvider:
                 retryable=True,
             ) from exc
 
+        truncated = len(body) > self._max_body_bytes
+        if truncated:
+            body = body[: self._max_body_bytes]
         latency_ms = int((time.monotonic() - started) * 1000)
         cost = ProviderCost.parse(headers.get(HEADER_COST), remaining=headers.get(HEADER_REMAINING))
 
@@ -223,6 +229,7 @@ class ScrapeDoProvider:
             cost=cost,
             request_id=headers.get(HEADER_REQUEST_ID),
             detected_defense=headers.get(HEADER_DETECTED_WAF) or None,
+            truncated=truncated,
         )
 
 

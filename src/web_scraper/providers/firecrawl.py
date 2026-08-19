@@ -217,6 +217,7 @@ class FirecrawlProvider:
             # keeps a stale record from being published as current.
             from_cache=None if request.strategy_id == CACHED.id else False,
             content_age_seconds=None,
+            truncated=result.truncated,
         )
 
     def _raise_for_provider_failure(self, status: int) -> None:

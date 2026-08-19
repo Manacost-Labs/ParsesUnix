@@ -22,6 +22,18 @@ from typing import Any, Protocol
 
 from web_scraper.providers.base import ProviderError, ProviderErrorKind
 
+#: Ceiling on a provider response body. The free transports have always had one;
+#: the paid path did not, which meant a single malfunctioning provider response
+#: could read unbounded bytes into memory. A provider is not more trustworthy
+#: than an origin — it is just better paid.
+DEFAULT_MAX_BODY_BYTES = 8_000_000
+
+#: We never send Accept-Encoding, so a compressed body is unsolicited. urllib
+#: does not decompress on its own, so a bomb cannot expand here — but the
+#: compressed bytes still count against the ceiling above, and a body we cannot
+#: read as text is reported rather than silently handed to triage as garbage.
+UNSOLICITED_ENCODINGS = frozenset({"gzip", "br", "deflate", "zstd"})
+
 
 class Opener(Protocol):
     """Just enough of urllib's opener for adapters, so tests can substitute one."""
@@ -35,6 +47,14 @@ class HttpResult:
     headers: dict[str, str]
     body: bytes
     latency_ms: int
+    #: True when the body hit the ceiling. Triage must not read a truncated
+    #: document as a thin page: the bytes we have are a prefix, not the content.
+    truncated: bool = False
+
+    @property
+    def content_encoding(self) -> str | None:
+        value = self.headers.get("content-encoding", "").strip().lower()
+        return value or None
 
     def json(self, *, provider: str) -> Any:
         """Parse the envelope, or say the provider answered unusably.
@@ -63,6 +83,7 @@ def post_json(
     provider: str,
     timeout_seconds: float,
     opener: Opener | None = None,
+    max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
 ) -> HttpResult:
     """POST a JSON body, mapping only transport-level failures.
 
@@ -77,7 +98,13 @@ def post_json(
         headers={"Content-Type": "application/json", **headers},
         method="POST",
     )
-    return _send(request, provider=provider, timeout_seconds=timeout_seconds, opener=opener)
+    return _send(
+        request,
+        provider=provider,
+        timeout_seconds=timeout_seconds,
+        opener=opener,
+        max_body_bytes=max_body_bytes,
+    )
 
 
 def get(
@@ -87,11 +114,18 @@ def get(
     provider: str,
     timeout_seconds: float,
     opener: Opener | None = None,
+    max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
 ) -> HttpResult:
     """GET a URL built by the adapter from its own constant endpoint."""
 
     request = urllib.request.Request(url, headers=headers or {})  # noqa: S310 - см. post_json
-    return _send(request, provider=provider, timeout_seconds=timeout_seconds, opener=opener)
+    return _send(
+        request,
+        provider=provider,
+        timeout_seconds=timeout_seconds,
+        opener=opener,
+        max_body_bytes=max_body_bytes,
+    )
 
 
 def _send(
@@ -100,6 +134,7 @@ def _send(
     provider: str,
     timeout_seconds: float,
     opener: Opener | None,
+    max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
 ) -> HttpResult:
     started = time.monotonic()
     try:
@@ -107,11 +142,13 @@ def _send(
         with client.urlopen(request, timeout=timeout_seconds) as response:
             status = int(response.status)
             headers = {str(k).lower(): str(v) for k, v in response.headers.items()}
-            body = response.read()
+            # Read one byte past the ceiling so we can tell "exactly at the
+            # limit" from "larger than the limit" without buffering the rest.
+            body = response.read(max_body_bytes + 1)
     except urllib.error.HTTPError as exc:
         status = int(exc.code)
         headers = {str(k).lower(): str(v) for k, v in (exc.headers or {}).items()}
-        body = exc.read()
+        body = exc.read(max_body_bytes + 1)
     except TimeoutError as exc:
         # We do not know whether the request reached the provider, so callers
         # must treat the spend as unknown rather than refunding it.
@@ -129,9 +166,14 @@ def _send(
             retryable=True,
         ) from exc
 
+    truncated = len(body) > max_body_bytes
+    if truncated:
+        body = body[:max_body_bytes]
+
     return HttpResult(
         status=status,
         headers=headers,
         body=body,
         latency_ms=int((time.monotonic() - started) * 1000),
+        truncated=truncated,
     )

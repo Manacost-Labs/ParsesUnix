@@ -43,8 +43,9 @@ class FakeHTTP:
             status = outer.status
             headers = outer.headers
 
-            def read(self):
-                return outer.body
+            def read(self, amount=None):
+                # Real socket reads take a limit; the adapters now pass one.
+                return outer.body if amount is None else outer.body[:amount]
 
             def __enter__(self):
                 return self
