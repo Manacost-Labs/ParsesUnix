@@ -42,6 +42,8 @@ from web_scraper.providers.stats import (
     ProviderStrategyKey,
     ProviderStrategyStats,
 )
+from web_scraper.providers.zenrows import ZenRowsProvider
+from web_scraper.providers.zyte import ZyteProvider
 
 __all__ = [
     "DEFAULT_SNAPSHOTS",
@@ -73,4 +75,6 @@ __all__ = [
     "ProviderStrategyStats",
     "ScrapeDoProvider",
     "StrategyRate",
+    "ZenRowsProvider",
+    "ZyteProvider",
 ]

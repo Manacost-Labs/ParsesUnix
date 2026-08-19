@@ -82,7 +82,42 @@ def preflight(config: RunConfig, *, pricing: PricingBook | None = None) -> Prefl
     ]
     checks.extend(_budget_checks(config))
     checks.extend(_pricing_checks(pricing or PricingBook()))
+    checks.extend(_provider_cost_safety())
     return PreflightReport(tuple(checks))
+
+
+def _provider_cost_safety() -> list[Check]:
+    """A funded provider whose cost cannot be bounded stops after one call.
+
+    That is correct behaviour, and it is also a surprise worth having before the
+    run rather than forty minutes into it: the operator sees "budget halted"
+    with no obvious cause unless someone says this out loud first.
+    """
+
+    checks: list[Check] = []
+    needs_bound = (
+        ("brightdata", "BRIGHTDATA_API_KEY", ("BRIGHTDATA_CPM_USD",)),
+        ("zenrows", "ZENROWS_API_KEY", ("ZENROWS_BASE_CPM_USD",)),
+        ("zyte", "ZYTE_API_KEY", ("ZYTE_HTTP_MAX_USD", "ZYTE_BROWSER_MAX_USD")),
+    )
+    for provider, key_env, bound_envs in needs_bound:
+        if not os.environ.get(key_env):
+            continue
+        missing = [name for name in bound_envs if not os.environ.get(name)]
+        checks.append(
+            Check(
+                f"{provider}_cost_bound",
+                not missing,
+                "bounded"
+                if not missing
+                else (
+                    f"{key_env} is set but {', '.join(missing)} is not; every call will "
+                    "settle UNKNOWN and halt paid work after the first one"
+                ),
+                severity="warning",
+            )
+        )
+    return checks
 
 
 def _profile(config: RunConfig) -> Check:

@@ -239,6 +239,136 @@ BRIGHT_DATA = PricingSnapshot(
     },
 )
 
+#: ZenRows publishes credit multipliers but the USD value of a credit depends on
+#: the plan. The operator supplies the CPM for BASIC requests; the documented
+#: multipliers do the rest.
+ZENROWS_CPM_ENV = "ZENROWS_BASE_CPM_USD"
+
+#: Zyte's price depends on the website tier, the mode and the features, and none
+#: of that is knowable from a request. Treating the cheapest published figure as
+#: a bound would understate the bill on exactly the hard domains where the paid
+#: layer gets used, so each mode takes its own operator-supplied ceiling.
+ZYTE_HTTP_MAX_ENV = "ZYTE_HTTP_MAX_USD"
+ZYTE_BROWSER_MAX_ENV = "ZYTE_BROWSER_MAX_USD"
+ZYTE_CAPTURE_MAX_ENV = "ZYTE_CAPTURE_MAX_USD"
+
+
+def zenrows_snapshot(base_cpm_usd: Decimal | str | None) -> PricingSnapshot:
+    """ZenRows priced from documented multipliers and the operator's plan rate.
+
+    The multipliers — 1x, 5x, 10x, 25x — are published and were read from the
+    live documentation, so they are deterministic: an unreported cost can be
+    bounded. What is NOT published is what a credit costs on a given plan, which
+    is why the base rate comes from the operator.
+
+    ``auto`` is the exception. The vendor decides which mode to use, so its
+    nominal is the cheapest it might pick and its bound is the dearest. Marking
+    it deterministic would let an unreported cost settle at the optimistic
+    figure, which is the wrong direction to be wrong in.
+    """
+
+    documented = "docs.zenrows.com pricing: 1x basic, 5x js, 10x premium, 25x both"
+    if base_cpm_usd is None:
+        return PricingSnapshot(
+            provider="zenrows",
+            native_unit="credits",
+            pricing_source=f"{documented}; no plan rate supplied",
+            docs_verified_at="2026-08-19",
+            effective_at="2026-08-19",
+            rates={
+                # Multipliers are known; the money is not. A reported cost is
+                # used when it arrives, and an unreported one is UNKNOWN.
+                "basic": StrategyRate(Decimal("1"), Decimal("0"), deterministic=False),
+                "js": StrategyRate(Decimal("5"), Decimal("0"), deterministic=False),
+                "premium": StrategyRate(Decimal("10"), Decimal("0"), deterministic=False),
+                "js_premium": StrategyRate(Decimal("25"), Decimal("0"), deterministic=False),
+                "auto": StrategyRate(
+                    Decimal("1"),
+                    Decimal("0"),
+                    deterministic=False,
+                    native_upper_bound=Decimal("25"),
+                ),
+            },
+        )
+
+    try:
+        cpm = Decimal(str(base_cpm_usd))
+    except (InvalidOperation, ValueError, TypeError):
+        return zenrows_snapshot(None)
+    if cpm <= 0:
+        return zenrows_snapshot(None)
+
+    per_credit = (cpm / Decimal("1000")).quantize(Decimal("0.00000001"))
+    note = f"operator plan rate {cpm} USD/1000 basic requests"
+    return PricingSnapshot(
+        provider="zenrows",
+        native_unit="credits",
+        pricing_source=f"{documented}; {ZENROWS_CPM_ENV} supplied",
+        docs_verified_at="2026-08-19",
+        effective_at="2026-08-19",
+        version="2",
+        rates={
+            "basic": StrategyRate(Decimal("1"), per_credit, deterministic=True, note=note),
+            "js": StrategyRate(Decimal("5"), per_credit, deterministic=True, note=note),
+            "premium": StrategyRate(Decimal("10"), per_credit, deterministic=True, note=note),
+            "js_premium": StrategyRate(Decimal("25"), per_credit, deterministic=True, note=note),
+            "auto": StrategyRate(
+                Decimal("1"),
+                per_credit,
+                # The vendor picks the mode, so the cost is not ours to predict.
+                # A reported cost settles it; an unreported one is UNKNOWN
+                # rather than optimistically 1x.
+                deterministic=False,
+                native_upper_bound=Decimal("25"),
+                note=f"{note}; vendor selects the mode, so 1x-25x is the range",
+            ),
+        },
+    )
+
+
+def zyte_snapshot(
+    http_max: Decimal | str | None,
+    browser_max: Decimal | str | None = None,
+    capture_max: Decimal | str | None = None,
+) -> PricingSnapshot:
+    """Zyte priced from ceilings the operator reads off their own account.
+
+    There is deliberately no default. Zyte's rate varies by website tier, and a
+    figure that is safe on an easy domain is an understatement on a hard one —
+    which is where the paid layer actually gets used. A missing ceiling means
+    UNKNOWN and a halt, which is the correct answer to "we cannot bound this".
+    """
+
+    def rate(ceiling: Decimal | str | None) -> StrategyRate:
+        if ceiling is None:
+            return StrategyRate(Decimal("1"), Decimal("0"), deterministic=False)
+        try:
+            usd = Decimal(str(ceiling))
+        except (InvalidOperation, ValueError, TypeError):
+            return StrategyRate(Decimal("1"), Decimal("0"), deterministic=False)
+        if usd <= 0:
+            return StrategyRate(Decimal("1"), Decimal("0"), deterministic=False)
+        return StrategyRate(
+            Decimal("1"),
+            usd,
+            deterministic=True,
+            note=f"operator ceiling {usd} USD/request",
+        )
+
+    return PricingSnapshot(
+        provider="zyte",
+        native_unit="requests",
+        pricing_source="operator-supplied per-request ceilings; Zyte prices by website tier",
+        docs_verified_at="2026-08-19",
+        effective_at="2026-08-19",
+        rates={
+            "http": rate(http_max),
+            "browser": rate(browser_max if browser_max is not None else http_max),
+            "browser_capture": rate(capture_max if capture_max is not None else browser_max),
+        },
+    )
+
+
 #: Environment variable carrying the operator's own Bright Data CPM, in USD per
 #: 1000 successful requests. Absent means we cannot bound a call and every one
 #: settles UNKNOWN.
@@ -308,6 +438,12 @@ class PricingBook:
                 SCRAPE_DO,
                 FIRECRAWL,
                 bright_data_snapshot(os.environ.get(BRIGHT_DATA_CPM_ENV)),
+                zenrows_snapshot(os.environ.get(ZENROWS_CPM_ENV)),
+                zyte_snapshot(
+                    os.environ.get(ZYTE_HTTP_MAX_ENV),
+                    os.environ.get(ZYTE_BROWSER_MAX_ENV),
+                    os.environ.get(ZYTE_CAPTURE_MAX_ENV),
+                ),
             )
         self._by_provider = {snapshot.provider: snapshot for snapshot in snapshots}
 

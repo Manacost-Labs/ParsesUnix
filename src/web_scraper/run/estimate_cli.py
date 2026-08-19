@@ -25,6 +25,8 @@ from web_scraper.providers.firecrawl import FirecrawlProvider
 from web_scraper.providers.multi_router import MultiProviderRouter
 from web_scraper.providers.scrape_do import ScrapeDoProvider
 from web_scraper.providers.stats import ProviderStatsStore
+from web_scraper.providers.zenrows import ZenRowsProvider
+from web_scraper.providers.zyte import ZyteProvider
 from web_scraper.queue.store import QueueStore
 
 #: Verdicts that leave a URL as paid work. Anything else is either resolved or
@@ -42,6 +44,10 @@ def configured_providers() -> list[Provider]:
         providers.append(FirecrawlProvider())
     if os.environ.get("BRIGHTDATA_API_KEY") and os.environ.get("BRIGHTDATA_ZONE"):
         providers.append(BrightDataProvider())
+    if os.environ.get("ZENROWS_API_KEY"):
+        providers.append(ZenRowsProvider())
+    if os.environ.get("ZYTE_API_KEY"):
+        providers.append(ZyteProvider())
     return providers
 
 
