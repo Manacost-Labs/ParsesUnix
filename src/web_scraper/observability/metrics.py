@@ -11,7 +11,7 @@ import logging
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any
 
 from web_scraper.contracts import Result, Verdict
@@ -32,10 +32,13 @@ class RunMetrics:
     fresh_unchanged: int = 0  # skipped or 304 — the download was avoided
     #: Downloaded but byte-identical to the last run: a fetch that saved nothing.
     fetched_unchanged: int = 0
+    #: Sum of the costs we actually KNOW. A lower bound whenever
+    #: ``unattributed_costs`` is non-zero — see ``cost_is_complete``.
     cost_credits: Decimal = Decimal("0")
     paid_calls: int = 0
-    #: Paid attempts whose reported cost could not be parsed. Money that cannot be
-    #: attributed is under-counted spend, so it is surfaced rather than dropped.
+    #: Paid calls whose cost the provider never reported. This is real money we
+    #: cannot name; it is counted separately so the total is never mistaken for
+    #: the whole bill.
     unattributed_costs: int = 0
     per_domain: Counter[str] = field(default_factory=Counter)
     #: Per-route health, straight from the route memory (see web_scraper.routing).
@@ -44,6 +47,12 @@ class RunMetrics:
     availability: dict[str, Any] = field(default_factory=dict)
     #: Browser pool health for the run (see fetchers.browser_pool).
     browser: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def cost_is_complete(self) -> bool:
+        """False when ``cost_credits`` is a floor rather than the real total."""
+
+        return self.unattributed_costs == 0
 
     def observe(
         self,
@@ -65,15 +74,16 @@ class RunMetrics:
         for attempt in result.attempts:
             if attempt.provider:
                 self.paid_calls += 1
-                try:
-                    self.cost_credits += Decimal(str(attempt.cost_credits))
-                except (InvalidOperation, ValueError, TypeError):
-                    # Never silently drop spend: an unparseable cost is reported
-                    # so the total is known to be incomplete.
+                if attempt.cost.is_known:
+                    self.cost_credits += attempt.cost.known_credits
+                else:
+                    # Real spend we cannot name. Adding zero here would make the
+                    # run look cheaper than it was, which is the failure mode
+                    # this counter exists to prevent.
                     self.unattributed_costs += 1
                     logger.warning(
-                        "unparseable cost %r on a paid attempt for %s",
-                        attempt.cost_credits,
+                        "paid call to %s for %s reported no cost; spend is unattributed",
+                        attempt.provider,
                         attempt.url,
                     )
         for source in (extractor_sources or {}).values():
@@ -90,6 +100,7 @@ class RunMetrics:
             "fresh_unchanged": self.fresh_unchanged,
             "fetched_unchanged": self.fetched_unchanged,
             "cost_credits": str(self.cost_credits),
+            "cost_is_complete": self.cost_is_complete,
             "paid_calls": self.paid_calls,
             "unattributed_costs": self.unattributed_costs,
             "per_domain": dict(self.per_domain),

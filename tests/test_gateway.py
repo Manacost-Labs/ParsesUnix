@@ -503,7 +503,8 @@ class PaidEscalationWiringTests(unittest.TestCase):
         outcome = self.run_gateway(None)
         self.assertEqual(outcome.result.verdict, Verdict.BLOCKED)
         self.assertIsNone(outcome.paid)
-        self.assertEqual(outcome.cost_credits, "0")
+        self.assertEqual(outcome.cost.credits, self.Decimal("0"))
+        self.assertTrue(outcome.cost.is_known, "no call happened: zero is measured, not assumed")
         self.assertEqual(self.budget.usage().credits, self.Decimal("0"))
 
     def test_paid_runs_only_after_every_free_route_is_spent(self) -> None:
@@ -523,10 +524,10 @@ class PaidEscalationWiringTests(unittest.TestCase):
 
     def test_the_cost_reported_is_the_cost_billed(self) -> None:
         outcome = self.run_gateway(self._make(self.provider()))
-        self.assertEqual(outcome.cost_credits, "5")
+        self.assertEqual(outcome.cost.credits, self.Decimal("5"))
         self.assertEqual(self.budget.usage().credits, self.Decimal("5"))
         l3 = next(a for a in outcome.result.attempts if a.level.value == "L3")
-        self.assertEqual(l3.cost_credits, "5")
+        self.assertEqual(l3.cost.credits, self.Decimal("5"))
         self.assertEqual(l3.provider, "scrape.do")
         self.assertEqual(l3.request_id, "req-9")
 
@@ -569,4 +570,4 @@ class PaidEscalationWiringTests(unittest.TestCase):
         challenge = b"<html><title>Just a moment...</title>checking your browser</html>"
         outcome = self.run_gateway(self._make(self.provider(challenge)))
         self.assertEqual(outcome.result.verdict, Verdict.SOFT_BLOCK)
-        self.assertEqual(outcome.cost_credits, "5", "a failed paid attempt is still billed")
+        self.assertEqual(outcome.cost.credits, self.Decimal("5"), "a failed paid attempt is billed")

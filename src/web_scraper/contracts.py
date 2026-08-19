@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any
 
@@ -201,6 +202,83 @@ class TriageResult:
 
 
 @dataclass(frozen=True)
+class Cost:
+    """What something cost, including the case where nobody told us.
+
+    Three states that must never be collapsed into each other:
+
+    - :meth:`free` - no paid call happened. A *measured* zero.
+    - :meth:`of` - the provider reported a number. Known spend.
+    - :meth:`unknown` - a paid call happened and its cost is NOT known.
+
+    The third state is the reason this type exists. Reporting unknown spend as
+    ``0`` understates the bill, and an understated bill is how a budget is
+    quietly exceeded: every downstream total would look affordable while real
+    money had already left. Unknown stays unknown all the way to the report.
+    """
+
+    credits: Decimal | None = Decimal("0")
+    attributed: bool = True
+
+    def __post_init__(self) -> None:
+        # The two fields are one fact expressed twice; disagreement would let a
+        # caller construct an "attributed unknown" that reads as zero.
+        if (self.credits is None) is self.attributed:
+            raise ValueError("credits is None if and only if the cost is unattributed")
+
+    @classmethod
+    def free(cls) -> Cost:
+        """No paid call. Zero is the truth here, not a placeholder."""
+
+        return cls(credits=Decimal("0"), attributed=True)
+
+    @classmethod
+    def of(cls, credits: Any) -> Cost:
+        """A reported cost. Anything unparseable is unknown, never zero."""
+
+        try:
+            return cls(credits=Decimal(str(credits)), attributed=True)
+        except (InvalidOperation, ValueError, TypeError):
+            return cls.unknown()
+
+    @classmethod
+    def unknown(cls) -> Cost:
+        """Spend happened; the amount is not known. Never worth zero."""
+
+        return cls(credits=None, attributed=False)
+
+    @property
+    def is_known(self) -> bool:
+        return self.attributed
+
+    @property
+    def known_credits(self) -> Decimal:
+        """For summing. Callers MUST also carry the unknown count alongside."""
+
+        return self.credits if self.credits is not None else Decimal("0")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "credits": str(self.credits) if self.credits is not None else None,
+            "attributed": self.attributed,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Any) -> Cost:
+        if data is None:
+            return cls.free()
+        if isinstance(data, Mapping):
+            if not data.get("attributed", True):
+                return cls.unknown()
+            return cls.of(data.get("credits", "0"))
+        # A bare scalar is the pre-structured form; treat it as reported.
+        return cls.of(data)
+
+    def __str__(self) -> str:
+        return "unknown" if self.credits is None else str(self.credits)
+
+
+@dataclass(frozen=True)
 class Attempt:
     """One fetch attempt against one URL through one route."""
 
@@ -213,7 +291,7 @@ class Attempt:
     body_bytes: int = 0
     elapsed_ms: int | None = None
     provider: str | None = None
-    cost_credits: str = "0"
+    cost: Cost = field(default_factory=Cost.free)
     request_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -227,7 +305,7 @@ class Attempt:
             "body_bytes": self.body_bytes,
             "elapsed_ms": self.elapsed_ms,
             "provider": self.provider,
-            "cost_credits": self.cost_credits,
+            "cost": self.cost.to_dict(),
             "request_id": self.request_id,
         }
 
@@ -244,7 +322,7 @@ class Attempt:
             body_bytes=data.get("body_bytes", 0),
             elapsed_ms=data.get("elapsed_ms"),
             provider=data.get("provider"),
-            cost_credits=data.get("cost_credits", "0"),
+            cost=Cost.from_dict(data.get("cost", data.get("cost_credits"))),
             request_id=data.get("request_id"),
         )
 

@@ -36,6 +36,7 @@ from web_scraper.contracts import (
     PAID_ESCALATION_VERDICTS,
     Attempt,
     ContentRules,
+    Cost,
     Level,
     Result,
     Route,
@@ -173,12 +174,18 @@ class GatewayOutcome:
         return self.result.verdict in PAID_ESCALATION_VERDICTS
 
     @property
-    def cost_credits(self) -> str:
-        """What this URL cost. "0" is a measured zero; None would be a guess."""
+    def cost(self) -> Cost:
+        """What this URL cost.
 
-        if self.paid is None or self.paid.actual_cost is None:
-            return "0"
-        return str(self.paid.actual_cost)
+        Free when no paid call happened, and *unknown* — never zero — when one
+        happened whose cost the provider never reported.
+        """
+
+        if self.paid is None or not self.paid.attempted:
+            return Cost.free()
+        if self.paid.actual_cost is None:
+            return Cost.unknown()
+        return Cost.of(self.paid.actual_cost)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -186,6 +193,7 @@ class GatewayOutcome:
             "paid_escalation_candidate": self.paid_escalation_candidate,
             "skipped_routes": list(self.skipped_routes),
             "snapshot_paths": list(self.snapshot_paths),
+            "cost": self.cost.to_dict(),
             "paid": self.paid.to_dict() if self.paid else None,
         }
 
@@ -205,6 +213,14 @@ def _raw_from_provider(url: str, response: ProviderResponse) -> RawResponse:
         body=response.body,
         elapsed_ms=response.latency_ms,
     )
+
+
+def _paid_cost(paid: PaidAttempt) -> Cost:
+    """A refusal to call is free; a call with no reported cost is unknown."""
+
+    if not paid.attempted:
+        return Cost.free()
+    return Cost.unknown() if paid.actual_cost is None else Cost.of(paid.actual_cost)
 
 
 def _paid_attempt_record(url: str, paid: PaidAttempt, *, free_verdict: Verdict) -> Attempt:
@@ -230,7 +246,7 @@ def _paid_attempt_record(url: str, paid: PaidAttempt, *, free_verdict: Verdict) 
         body_bytes=len(response.body) if response else 0,
         elapsed_ms=response.latency_ms if response else None,
         provider=response.provider if response else None,
-        cost_credits=str(paid.actual_cost) if paid.actual_cost is not None else "0",
+        cost=_paid_cost(paid),
         request_id=response.request_id if response else None,
     )
 
