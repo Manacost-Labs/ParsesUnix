@@ -6,6 +6,7 @@ package.
 """
 
 from web_scraper.fetchers.base import RawResponse, Transport, TransportUnavailable
+from web_scraper.fetchers.browser_worker import BrowserBusy, BrowserWorker
 from web_scraper.fetchers.circuit import CircuitBreaker
 from web_scraper.fetchers.gateway import (
     FetchGateway,
@@ -26,6 +27,8 @@ from web_scraper.fetchers.transports import (
 )
 
 __all__ = [
+    "BrowserBusy",
+    "BrowserWorker",
     "CircuitBreaker",
     "FetchGateway",
     "GatewayOutcome",

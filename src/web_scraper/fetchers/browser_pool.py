@@ -79,8 +79,16 @@ class _DomainContext:
 class BrowserPool:
     """Shared Chromium with per-domain contexts, all of it bounded.
 
-    Thread-safe: contexts are handed out under a lock so two workers on the same
-    domain share one context rather than racing to create two.
+    **Single-threaded.** The lock here guards this object's bookkeeping, not the
+    browser: sync Playwright objects belong to the greenlet that created them,
+    and touching a page from another thread raises
+    ``greenlet.error: Cannot switch to a different thread``. Measured, not
+    assumed — an earlier version of this docstring claimed thread-safety and
+    three worker threads sharing one pool failed exactly that way.
+
+    For concurrency use :class:`~web_scraper.fetchers.browser_worker.BrowserWorker`,
+    which owns a pool on a dedicated thread and accepts work through a bounded
+    queue.
     """
 
     def __init__(
