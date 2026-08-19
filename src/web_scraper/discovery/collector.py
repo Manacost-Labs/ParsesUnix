@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -88,6 +89,10 @@ class DiscoveryCollector:
     min_pages: int = DEFAULT_MIN_PAGES
     max_candidates: int = MAX_CANDIDATES_PER_PAGE
     _seen: dict[str, _Accumulated] = field(default_factory=dict, repr=False)
+    #: Observations arrive on the browser thread while the run loop reads
+    #: candidates from its own. One lock is cheaper than the class of bug that
+    #: comes from assuming they never overlap.
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def __post_init__(self) -> None:
         if self.resolver is None:
@@ -103,13 +108,27 @@ class DiscoveryCollector:
         cookie" instead of silence.
         """
 
-        if len(self._seen) >= self.max_candidates and self._identity(request) not in self._seen:
-            return
-
+        identity = self._identity(request)
+        # Screening happens outside the lock: it does DNS resolution, and
+        # holding a lock across a network call would stall the run loop behind
+        # the browser thread.
         verdict, detail = self._screen(request)
         document = self._parse(request) if verdict is CandidateVerdict.PROMISING else None
 
-        identity = self._identity(request)
+        with self._lock:
+            self._record(identity, request, verdict, detail, document)
+
+    def _record(
+        self,
+        identity: str,
+        request: ObservedRequest,
+        verdict: CandidateVerdict,
+        detail: str,
+        document: Any,
+    ) -> None:
+        if len(self._seen) >= self.max_candidates and identity not in self._seen:
+            return
+
         existing = self._seen.get(identity)
         if existing is None:
             self._seen[identity] = _Accumulated(
@@ -182,8 +201,11 @@ class DiscoveryCollector:
     def candidates(self) -> list[RouteCandidate]:
         """Everything observed, judged, best first."""
 
+        with self._lock:
+            snapshot = dict(self._seen)
+
         out: list[RouteCandidate] = []
-        for identity, seen in self._seen.items():
+        for identity, seen in snapshot.items():
             verdict = seen.verdict
             if verdict is CandidateVerdict.PROMISING and len(seen.pages) >= self.min_pages:
                 verdict = CandidateVerdict.VALIDATED

@@ -42,7 +42,7 @@ API = "https://csr-demo.example/api/stats?page=1"
 API_BODY = json.dumps(
     {
         "data": {
-            "player": {"name": "Thrall", "score": 93},
+            "player": {"title": "Thrall", "name": "Thrall", "score": 93},
             "meta": {"total": 120, "next_cursor": "c2"},
         }
     }
@@ -339,3 +339,155 @@ class PaginationCarriesOverTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RunnerDiscoveryTests(unittest.TestCase):
+    """VALIDATED reached inside a real Runner, not just in a unit test.
+
+    This is what the wiring is for. A probe renders one page and can only ever
+    report PROMISING; a run renders many, and the threshold that separates a
+    coincidence from a pattern is only reachable there.
+    """
+
+    def setUp(self) -> None:
+        tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        self.state = Path(tempdir.name)
+        self.rendered: list[str] = []
+
+    def runner(self, *, count: int = 8, **cfg):
+        """A gateway whose L2 transport renders AND reports what it 'saw'."""
+
+        profile = html_profile()
+        outer = self
+
+        def provider(route, url_class, url):
+            level = route.level.value
+            observer = cfg.pop("_observer", None) or getattr(self, "_observer", None)
+
+            class Transport:
+                def fetch(self, target, *, headers=None):
+                    if level == "L2":
+                        outer.rendered.append(target)
+                        if observer is not None:
+                            # What a real render's network watcher would emit:
+                            # the data fetch, plus the noise every page loads.
+                            observer(
+                                {
+                                    "url": API,
+                                    "method": "GET",
+                                    "status": 200,
+                                    "content_type": "application/json",
+                                    "resource_type": "xhr",
+                                    "body": API_BODY,
+                                    "page_url": target,
+                                    "request_header_names": ("Accept",),
+                                }
+                            )
+                            observer(
+                                {
+                                    "url": "https://www.google-analytics.com/collect?v=1",
+                                    "method": "POST",
+                                    "status": 200,
+                                    "content_type": "application/json",
+                                    "resource_type": "xhr",
+                                    "body": b"{}",
+                                    "page_url": target,
+                                }
+                            )
+                        body = RENDERED
+                    else:
+                        body = CSR_SHELL
+                    return RawResponse(
+                        requested_url=target,
+                        final_url=target,
+                        status=200,
+                        headers={"Content-Type": "text/html"},
+                        body=body,
+                        elapsed_ms=5,
+                    )
+
+            return Transport()
+
+        config = RunConfig(
+            profile_path=self.state / "p.json",
+            state_dir=self.state,
+            seed_urls=tuple(page_url(i) for i in range(count)),
+            browser_pool=False,
+            free_canary=False,
+            **cfg,
+        )
+        runner = Runner(
+            config,
+            profile=profile,
+            gateway=FetchGateway(profile, transport_provider=provider, pacer=NoWaitPacer()),
+            wall_clock=lambda: 1000.0,
+        )
+        # An injected gateway does not get the runner's observer automatically,
+        # so the test supplies the same callable the production wiring uses.
+        self._observer = runner._observe_network
+        if runner._discovery is not None:
+            # `.example` is a reserved TLD that never resolves, and the SSRF
+            # check does a real lookup. Supplying a resolver rather than
+            # weakening the check.
+            runner._discovery.resolver = PUBLIC_RESOLVER
+        return runner
+
+    def test_a_run_reaches_validated_where_a_probe_cannot(self) -> None:
+        result = self.runner(count=8).run()
+        discovery = result.report["discovery"]
+        self.assertGreater(len(self.rendered), 1, "several pages were rendered")
+        self.assertGreaterEqual(discovery["api_routes_validated"], 1)
+
+    def test_the_run_report_carries_a_ready_draft(self) -> None:
+        result = self.runner(count=8).run()
+        drafts = result.report["discovery"]["drafts"]
+        self.assertEqual(len(drafts), 1)
+        self.assertEqual(drafts[0]["suggested_route"]["level"], "L0")
+        self.assertIn("title", drafts[0]["extractor"]["fields"])
+
+    def test_noise_never_reaches_a_draft(self) -> None:
+        result = self.runner(count=8).run()
+        listing = result.report["discovery"]["listing"]
+        self.assertIn("google-analytics", listing, "it was seen")
+        drafts = json.dumps(result.report["discovery"]["drafts"])
+        self.assertNotIn("google-analytics", drafts, "and it was refused")
+
+    def test_the_saving_is_only_claimed_where_it_was_counted(self) -> None:
+        # A validated endpoint covers the renders this run actually performed.
+        # No number is invented for future runs, because they have not happened.
+        result = self.runner(count=8).run()
+        discovery = result.report["discovery"]
+        self.assertEqual(
+            discovery["browser_renders_replaceable"], discovery["browser_renders_this_run"]
+        )
+        self.assertIn("not estimated here", discovery["note"])
+
+    def test_discovery_can_be_switched_off(self) -> None:
+        result = self.runner(count=4, discover_api=False).run()
+        self.assertEqual(result.report["discovery"], {})
+
+    def test_a_broken_observer_never_fails_the_run(self) -> None:
+        # Discovery is a passenger on the render; a passenger must not be able
+        # to crash the vehicle.
+        runner = self.runner(count=4)
+
+        class Broken:
+            def observe(self, request):
+                raise RuntimeError("discovery blew up")
+
+            def candidates(self):
+                return []
+
+        runner._discovery = Broken()  # type: ignore[assignment]
+        result = runner.run()  # must not raise
+        self.assertEqual(result.report["accounting"]["unaccounted"], 0)
+
+    def test_url_accounting_survives_discovery(self) -> None:
+        result = self.runner(count=8).run()
+        self.assertEqual(result.report["accounting"]["unaccounted"], 0)
+
+    def test_the_run_stays_free(self) -> None:
+        result = self.runner(count=8).run()
+        self.assertEqual(result.report["metrics"]["paid_calls"], 0)
+        self.assertEqual(result.report["metrics"]["cost_credits"], "0")

@@ -28,6 +28,10 @@ class RunConfig:
     #: Run a paid canary before the paid phases. Off means the paid batch starts
     #: on yesterday's statistics alone.
     paid_canary: bool = True
+    #: Observe network traffic during browser renders and propose cheaper
+    #: structured routes. Costs nothing: it rides along with renders that were
+    #: happening anyway.
+    discover_api: bool = True
 
     seed_urls: tuple[str, ...] = ()
     deadline_seconds: float | None = None  # run-window cap; None = until the queue drains
@@ -96,6 +100,7 @@ class RunConfig:
             run_id=str(data.get("run_id", "")),
             free_canary=bool(data.get("free_canary", True)),
             paid_canary=bool(data.get("paid_canary", True)),
+            discover_api=bool(data.get("discover_api", True)),
             seed_urls=tuple(data.get("seed_urls", ())),
             deadline_seconds=data.get("deadline_seconds"),
             batch_size=int(data.get("batch_size", 20)),

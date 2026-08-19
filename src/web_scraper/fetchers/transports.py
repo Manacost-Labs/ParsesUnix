@@ -196,6 +196,7 @@ class PlaywrightRenderTransport:
         headless: bool = True,
         pool: BrowserPool | None = None,
         worker: BrowserWorkerLike | None = None,
+        network_observer: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.allow_private = allow_private
         self.resolver = resolver
@@ -203,6 +204,58 @@ class PlaywrightRenderTransport:
         self.headless = headless
         self.pool = pool
         self.worker = worker
+        # Called once per response the rendered page received. A plain mapping
+        # rather than a typed object so this module stays unaware of discovery:
+        # the fetch layer should not import the layer that interprets it.
+        self.network_observer = network_observer
+
+    def _watch_network(self, page: Any, page_url: str) -> None:  # pragma: no cover - live browser
+        """Report every JSON-ish response the page received.
+
+        The body is read here, inside the browser thread, because a Playwright
+        response object cannot be read after the page closes. Failures are
+        swallowed deliberately: discovery rides along with a render, and a
+        render must never fail because the thing watching it did.
+        """
+
+        observer = self.network_observer
+        if observer is None:
+            return
+
+        def on_response(response: Any) -> None:
+            try:
+                request = response.request
+                content_type = response.header_value("content-type") or ""
+                resource = getattr(request, "resource_type", "") or ""
+                body = b""
+                if "json" in content_type.lower():
+                    try:
+                        body = response.body()
+                    except Exception:  # noqa: BLE001 - Playwright raises many
+                        # A body can be unavailable for a dozen reasons: the
+                        # request was served from cache, the page navigated
+                        # away, the response was a redirect. None of them is
+                        # worth failing a render over.
+                        body = b""
+                observer(
+                    {
+                        "url": response.url,
+                        "method": request.method,
+                        "status": response.status,
+                        "content_type": content_type,
+                        "resource_type": resource,
+                        # Names only. A header VALUE captured here would end up
+                        # in a report; the names are what decide the verdict.
+                        "request_header_names": tuple(request.all_headers().keys()),
+                        "request_body": request.post_data,
+                        "body": body,
+                        "page_url": page_url,
+                    }
+                )
+            except Exception:
+                logger.debug("network observation failed for a response", exc_info=True)
+
+        page.on("response", on_response)
 
     def _guard_route(self, route: Any) -> None:  # pragma: no cover - needs a live browser
         # Abort any request (navigation or subresource) to a non-public host, so
@@ -277,6 +330,8 @@ class PlaywrightRenderTransport:
         domain = urlsplit(url).netloc
         with pool.page(domain) as page:
             page.context.route("**/*", self._guard_route)
+            if self.network_observer is not None:
+                self._watch_network(page, url)
             try:
                 response = page.goto(url, timeout=self.timeout * 1000)
             except Exception as exc:

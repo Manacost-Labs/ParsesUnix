@@ -111,6 +111,7 @@ def default_transport_provider(
     session_clock: Callable[[], float] = time.monotonic,
     browser_pool: BrowserPool | None = None,
     browser_worker: Any = None,
+    network_observer: Callable[[dict[str, Any]], None] | None = None,
 ) -> TransportProvider:
     """L0 -> plain urllib, L1 -> per-domain cookie session, L2 -> browser.
 
@@ -155,6 +156,7 @@ def default_transport_provider(
                 timeout=max(timeout, 30.0),
                 pool=browser_pool,
                 worker=browser_worker,
+                network_observer=network_observer,
             )
         raise TransportUnavailable(
             "paid levels are handled by provider adapters (stage 3), not the free gateway"

@@ -22,6 +22,7 @@ from typing import Any
 
 from web_scraper.budget import BudgetLedger
 from web_scraper.contracts import Result, Verdict
+from web_scraper.discovery import DiscoveryCollector, observed_from_mapping, summarise
 from web_scraper.extract import extract_fields, run_quorum
 from web_scraper.fetchers import CircuitBreaker, FetchGateway, RawResponse
 from web_scraper.fetchers.browser_pool import BrowserPool
@@ -125,7 +126,10 @@ class Runner:
             ).start()
         self._gateway = gateway or FetchGateway(
             self.profile,
-            transport_provider=default_transport_provider(browser_worker=self._browser),
+            transport_provider=default_transport_provider(
+                browser_worker=self._browser,
+                network_observer=self._observe_network,
+            ),
             snapshots=self.snapshots,
             breaker=CircuitBreaker(),
             route_stats=self.route_stats,
@@ -150,9 +154,49 @@ class Runner:
             allowed=self._allowed_phases(),
         )
         self._canary_reports: dict[str, Any] = {}
+        # Discovery rides along with browser renders. It accumulates across the
+        # whole run, which is the point: one page proves nothing, and the
+        # threshold for VALIDATED is only reachable once several pages of the
+        # same class have been rendered.
+        self._discovery = (
+            DiscoveryCollector(
+                wanted_fields=self._critical_fields(),
+                allow_private=config.allow_private,
+            )
+            if config.discover_api
+            else None
+        )
         #: Set by a signal handler or by request_stop(). Read between URLs, so a
         #: shutdown never interrupts a paid call it cannot account for.
         self._stopping = False
+
+    def _critical_fields(self) -> tuple[str, ...]:
+        """What discovery should look for: the fields the profile actually needs.
+
+        Searching for the profile's own critical fields is what makes a draft
+        checkable — the extractor paths come from where those fields were seen,
+        not from a template.
+        """
+
+        names: set[str] = set()
+        for cls in self.profile.url_classes.values():
+            names |= set(cls.quorum_fields or ())
+            names |= set(cls.required_fields or ())
+        return tuple(sorted(names))
+
+    def _observe_network(self, payload: dict[str, Any]) -> None:
+        """Called from the browser thread for every response a render received.
+
+        Guarded: discovery is a passenger on the render, and a passenger must
+        never be able to crash the vehicle.
+        """
+
+        if self._discovery is None:
+            return
+        try:
+            self._discovery.observe(observed_from_mapping(payload))
+        except Exception:
+            logger.debug("discovery failed to record an observation", exc_info=True)
 
     def _allowed_phases(self) -> tuple[Phase, ...]:
         """A run with no funded paid layer never enters a paid phase."""
@@ -188,7 +232,9 @@ class Runner:
         self._escalator = escalator
         return FetchGateway(
             self.profile,
-            transport_provider=default_transport_provider(browser_worker=self._browser),
+            transport_provider=default_transport_provider(
+                browser_worker=self._browser, network_observer=self._observe_network
+            ),
             snapshots=self.snapshots,
             breaker=CircuitBreaker(),
             route_stats=self.route_stats,
@@ -280,6 +326,7 @@ class Runner:
         )
         payload = report.to_dict()
         payload["canaries"] = self._canary_reports
+        payload["discovery"] = self._discovery_report()
         payload["phases"] = self._phases.to_dict()
         payload["paid_attempts"] = self._paid_ledger.summary()
         stranded = self._paid_ledger.stranded()
@@ -548,6 +595,42 @@ class Runner:
             reason=outcome.reason,
         )
         return outcome
+
+    def _discovery_report(self) -> dict[str, Any]:
+        """What the renders taught us, and what it would have saved.
+
+        The saving is stated only where it is countable: a validated endpoint
+        replaces the renders that were needed to find it, and that count is
+        known. No estimate is made for future runs, because nobody has run them.
+        """
+
+        if self._discovery is None:
+            return {}
+        candidates = self._discovery.candidates()
+        report = summarise(candidates)
+        rendered = self.metrics.by_level.get("L2", 0)
+        report["browser_renders_this_run"] = rendered
+        report["api_routes_discovered"] = len(candidates)
+        report["api_routes_validated"] = report["validated"]
+        if report["validated"] and rendered:
+            report["browser_renders_replaceable"] = rendered
+            report["note"] = (
+                f"{report['validated']} validated endpoint(s) cover the {rendered} render(s) "
+                "this run performed. Accepting a draft route makes those renders unnecessary; "
+                "the saving on future runs is not estimated here because they have not happened."
+            )
+        if report["validated"]:
+            self.alerter.send(
+                AlertEvent(
+                    kind="api_routes_validated",
+                    message=(
+                        f"{report['validated']} structured route candidate(s) validated; "
+                        "drafts are in the run report for review"
+                    ),
+                    context={"drafts": report["drafts"]},
+                )
+            )
+        return report
 
     def _recover_budget(self) -> None:
         """Resolve reservations from a crashed process, and alert if money is lost."""
