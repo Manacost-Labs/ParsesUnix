@@ -104,6 +104,23 @@ class BudgetLedger:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS usage_events_day_idx ON usage_events(day, provider)"
             )
+            # Reservations close the window between "we checked the budget" and
+            # "the provider charged us". Without them N concurrent workers all
+            # pass the check and all spend.
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS reservations (
+                    reservation_id TEXT PRIMARY KEY,
+                    day TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    credits TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS reservations_day_idx ON reservations(day, provider)"
+            )
 
     @staticmethod
     def _sum_rows(rows: list[tuple[str, str]]) -> tuple[Decimal, Decimal]:
@@ -122,6 +139,112 @@ class BudgetLedger:
             rows = list(connection.execute(query, params))
         credits, money = self._sum_rows(rows)
         return Usage(selected_day, credits, money, len(rows))
+
+    def reserve(
+        self,
+        *,
+        provider: str,
+        credits: Decimal | int | float | str,
+        reservation_id: str | None = None,
+        day: str | None = None,
+    ) -> Reservation:
+        """Hold credits before spending them. Raises BudgetExceeded if over the cap.
+
+        The hold counts against the daily limit immediately, so two workers
+        cannot both be told there is room for the last call.
+        """
+
+        if not provider.strip():
+            raise ValueError("provider must not be empty")
+        selected_day = day or _utc_day()
+        amount = _decimal(credits)
+        holder = reservation_id or str(uuid.uuid4())
+
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            committed, _money = self._sum_rows(
+                list(
+                    connection.execute(
+                        "SELECT credits, money FROM usage_events WHERE day = ?", (selected_day,)
+                    )
+                )
+            )
+            held = sum(
+                (
+                    _decimal(row[0])
+                    for row in connection.execute(
+                        "SELECT credits FROM reservations WHERE day = ?", (selected_day,)
+                    )
+                ),
+                Decimal("0"),
+            )
+            projected = committed + held + amount
+            if self.daily_credit_limit is not None and projected > self.daily_credit_limit:
+                connection.rollback()
+                raise BudgetExceeded(
+                    f"daily credit limit {self.daily_credit_limit} would be exceeded: "
+                    f"{committed} spent + {held} held + {amount} requested"
+                )
+            connection.execute(
+                "INSERT INTO reservations(reservation_id, day, provider, credits) VALUES (?,?,?,?)",
+                (holder, selected_day, provider.strip(), str(amount)),
+            )
+            connection.commit()
+        return Reservation(holder, provider.strip(), selected_day, amount)
+
+    def settle(
+        self,
+        reservation: Reservation,
+        *,
+        actual_credits: Decimal | int | float | str,
+        money: Decimal | int | float | str = Decimal("0"),
+    ) -> Usage:
+        """Replace a hold with what the call actually cost.
+
+        The measured cost may differ from the estimate in either direction; the
+        ledger records what happened, not what we guessed.
+        """
+
+        actual = _decimal(actual_credits)
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "DELETE FROM reservations WHERE reservation_id = ?", (reservation.reservation_id,)
+            )
+            connection.execute(
+                """
+                INSERT INTO usage_events(request_id, day, provider, credits, money)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(request_id) DO NOTHING
+                """,
+                (
+                    reservation.reservation_id,
+                    reservation.day,
+                    reservation.provider,
+                    str(actual),
+                    str(_decimal(money)),
+                ),
+            )
+            connection.commit()
+        return self.usage(day=reservation.day)
+
+    def release(self, reservation: Reservation) -> None:
+        """Drop a hold for a call that never happened. Nothing is charged."""
+
+        with closing(self._connect()) as connection, connection:
+            connection.execute(
+                "DELETE FROM reservations WHERE reservation_id = ?", (reservation.reservation_id,)
+            )
+
+    def held_credits(self, *, day: str | None = None) -> Decimal:
+        selected_day = day or _utc_day()
+        with closing(self._connect()) as connection:
+            rows = list(
+                connection.execute(
+                    "SELECT credits FROM reservations WHERE day = ?", (selected_day,)
+                )
+            )
+        return sum((_decimal(row[0]) for row in rows), Decimal("0"))
 
     def record(
         self,
@@ -183,6 +306,24 @@ class BudgetLedger:
             )
             connection.commit()
         return Usage(selected_day, next_credits, next_money, len(rows) + 1)
+
+
+@dataclass(frozen=True)
+class Reservation:
+    """Credits held for a paid call that has not happened yet."""
+
+    reservation_id: str
+    provider: str
+    day: str
+    credits: Decimal
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "reservation_id": self.reservation_id,
+            "provider": self.provider,
+            "day": self.day,
+            "credits": str(self.credits),
+        }
 
 
 def main(argv: Sequence[str] | None = None) -> int:
