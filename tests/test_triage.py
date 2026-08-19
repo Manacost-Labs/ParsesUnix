@@ -177,3 +177,43 @@ class CsrShellTests(unittest.TestCase):
             rules=ContentRules(min_body_bytes=2, canary="items"),
         )
         self.assertEqual(result.verdict, Verdict.OK)
+
+
+class CanaryScopeTests(unittest.TestCase):
+    """A canary hiding in a script tag is not evidence that the page rendered."""
+
+    RULES = ContentRules(min_body_bytes=100, canary="Einstein")
+    HTML = {"Content-Type": "text/html"}
+
+    def test_a_canary_only_inside_a_script_does_not_pass(self) -> None:
+        # The shape of quotes.toscrape.com/js: every quote lives in a JS array and
+        # the document itself carries almost no text. Matching raw HTML reported
+        # this as OK, which is silent corruption - extraction would find nothing.
+        body = (
+            b"<html><body><div class='quotes'></div>"
+            b"<script>var data=[{author:'Einstein',text:'"
+            + b"x" * 800
+            + b"'}];render(data);</script></body></html>"
+        )
+        result = classify_response(status=200, body=body, headers=self.HTML, rules=self.RULES)
+        self.assertEqual(result.verdict, Verdict.CSR_REQUIRED)
+
+    def test_the_same_content_rendered_server_side_passes(self) -> None:
+        body = (
+            b"<html><body><div class='quote'><span>Einstein</span><p>"
+            + b"word " * 200
+            + b"</p></div></body></html>"
+        )
+        result = classify_response(status=200, body=body, headers=self.HTML, rules=self.RULES)
+        self.assertEqual(result.verdict, Verdict.OK)
+
+    def test_a_markup_canary_still_works(self) -> None:
+        # Script contents are removed but tags are kept, so "<article" matches.
+        body = b"<html><body><article><p>" + b"word " * 200 + b"</p></article></body></html>"
+        result = classify_response(
+            status=200,
+            body=body,
+            headers=self.HTML,
+            rules=ContentRules(min_body_bytes=100, canary="<article"),
+        )
+        self.assertEqual(result.verdict, Verdict.OK)

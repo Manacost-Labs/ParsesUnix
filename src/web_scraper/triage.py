@@ -69,9 +69,14 @@ _SCRIPT_BLOCK_RE = re.compile(
 CSR_MAX_VISIBLE_TEXT = 400
 
 
+def _strip_script_blocks(body: bytes) -> bytes:
+    """The document with script/style contents removed, markup otherwise intact."""
+
+    return _SCRIPT_BLOCK_RE.sub(b" ", body)
+
+
 def _visible_text_length(body: bytes) -> int:
-    stripped = _SCRIPT_BLOCK_RE.sub(b" ", body)
-    stripped = _TAG_RE.sub(b" ", stripped)
+    stripped = _TAG_RE.sub(b" ", _strip_script_blocks(body))
     return len(b" ".join(stripped.split()))
 
 
@@ -94,8 +99,16 @@ def looks_like_csr_shell(body: bytes, content_type: str) -> bool:
     external_scripts = len(_SCRIPT_SRC_RE.findall(body))
     has_hydration = bool(_HYDRATION_RE.search(body))
 
-    # An empty mount point, or a script-only document that announces hydration.
-    return has_empty_root or (external_scripts >= 2 and has_hydration)
+    # Script bytes vs readable bytes: a document that is mostly script and almost
+    # no text is rendering client-side even without a framework mount point.
+    script_bytes = len(body) - len(_strip_script_blocks(body))
+    script_dominated = script_bytes > 4 * max(1, _visible_text_length(body))
+
+    return (
+        has_empty_root
+        or (external_scripts >= 2 and has_hydration)
+        or (script_dominated and (external_scripts >= 1 or script_bytes > 500))
+    )
 
 
 def _headers_lower(headers: Mapping[str, str] | None) -> dict[str, str]:
@@ -312,7 +325,12 @@ def classify_response(
                 return TriageResult(Verdict.PARSE_FAIL, json_error, status, len(payload))
 
         if selected_rules.all_canaries:
-            text = payload.decode("utf-8", errors="ignore")
+            # Match outside <script>/<style>. A canary found only inside a JS
+            # data blob is not proof the page rendered: quotes.toscrape.com/js
+            # ships every quote in a script variable and 98 characters of visible
+            # text, and matching raw HTML reported that as OK. Tags are kept, so
+            # markup canaries like "<article" still work.
+            text = _strip_script_blocks(payload).decode("utf-8", errors="ignore")
             missing = [canary for canary in selected_rules.all_canaries if canary not in text]
             if missing:
                 # Distinguish "the page changed" from "the page has not rendered

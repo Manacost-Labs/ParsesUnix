@@ -1,0 +1,83 @@
+{
+  "measured_at": "2026-08-19",
+  "level": "L1 (plain HTTP)",
+  "targets": [
+    {
+      "target": "quotes.toscrape.com/js/",
+      "kind": "heavy CSR (sandbox)",
+      "url": "https://quotes.toscrape.com/js/",
+      "status": 200,
+      "bytes": 5808,
+      "visible_text_chars": 98,
+      "l1_verdict": "CSR_REQUIRED",
+      "escalates_to_browser": true,
+      "paid_escalation_allowed": false
+    },
+    {
+      "target": "quotes.toscrape.com/",
+      "kind": "SSR twin of the above",
+      "url": "https://quotes.toscrape.com/",
+      "status": 200,
+      "bytes": 11064,
+      "visible_text_chars": 1745,
+      "l1_verdict": "OK",
+      "escalates_to_browser": false,
+      "paid_escalation_allowed": false
+    },
+    {
+      "target": "quotes.toscrape.com/scroll",
+      "kind": "infinite scroll",
+      "url": "https://quotes.toscrape.com/scroll",
+      "status": 200,
+      "bytes": 2673,
+      "visible_text_chars": 97,
+      "l1_verdict": "CSR_REQUIRED",
+      "escalates_to_browser": true,
+      "paid_escalation_allowed": false
+    },
+    {
+      "target": "books.toscrape.com/",
+      "kind": "large SSR + pagination",
+      "url": "https://books.toscrape.com/",
+      "status": 200,
+      "bytes": 51294,
+      "visible_text_chars": 1883,
+      "l1_verdict": "OK",
+      "escalates_to_browser": false,
+      "paid_escalation_allowed": false
+    },
+    {
+      "target": "scrapethissite ajax",
+      "kind": "AJAX/JSON-backed",
+      "url": "https://www.scrapethissite.com/pages/ajax-javascript/",
+      "status": 200,
+      "bytes": 13210,
+      "visible_text_chars": 778,
+      "l1_verdict": "OK",
+      "escalates_to_browser": false,
+      "paid_escalation_allowed": false
+    },
+    {
+      "target": "hsreplay.net/",
+      "kind": "Cloudflare + SPA shell",
+      "url": "https://hsreplay.net/",
+      "status": 200,
+      "bytes": 28965,
+      "visible_text_chars": 898,
+      "l1_verdict": "OK",
+      "escalates_to_browser": false,
+      "paid_escalation_allowed": false
+    },
+    {
+      "target": "hs-manacost.ru/",
+      "kind": "SSR WordPress",
+      "url": "https://hs-manacost.ru/",
+      "status": 200,
+      "bytes": 517791,
+      "visible_text_chars": 8622,
+      "l1_verdict": "PARSE_FAIL",
+      "escalates_to_browser": false,
+      "paid_escalation_allowed": false
+    }
+  ]
+}
