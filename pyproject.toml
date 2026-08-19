@@ -41,6 +41,7 @@ ws-budget = "web_scraper.budget:main"
 ws-run = "web_scraper.run.cli:main"
 ws-regress = "web_scraper.regression.cli:main"
 ws-diagnose = "web_scraper.diagnose.cli:main"
+ws-benchmark = "web_scraper.calibration.cli:main"
 
 [tool.ruff]
 line-length = 100

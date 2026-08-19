@@ -49,8 +49,12 @@ class StrategyRate:
 
     #: Native units the vendor bills for a single call at list price.
     native_per_call: Decimal
-    #: Price of one native unit in USD.
-    usd_per_native_unit: Decimal
+    #: Price of one native unit in USD. ``None`` when nothing tells us the
+    #: rate — an operator who has not supplied their plan price, or a vendor
+    #: that publishes none. It is deliberately NOT zero: a strategy priced at
+    #: zero sorts first in every cost comparison, so an unpriced one would be
+    #: chosen ahead of every strategy whose price we actually know.
+    usd_per_native_unit: Decimal | None
     #: True when the vendor documents this figure with no undocumented
     #: multiplier that could exceed it. Only these may settle as PROVISIONAL.
     deterministic: bool = False
@@ -66,14 +70,25 @@ class StrategyRate:
             return self.native_per_call
         return max(self.native_upper_bound, self.native_per_call)
 
-    def usd(self, native_amount: Decimal) -> Decimal:
+    def usd(self, native_amount: Decimal) -> Decimal | None:
+        """Canonical money for an amount of native units, or ``None``.
+
+        ``None`` propagates all the way to the router, which sorts unpriced
+        options last. Returning zero here instead would make an unpriceable
+        strategy look like the cheapest thing in the fleet.
+        """
+
+        if self.usd_per_native_unit is None:
+            return None
         return (native_amount * self.usd_per_native_unit).quantize(Decimal("0.000001"))
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "native_per_call": str(self.native_per_call),
             "native_upper_bound": str(self.upper_bound),
-            "usd_per_native_unit": str(self.usd_per_native_unit),
+            "usd_per_native_unit": (
+                None if self.usd_per_native_unit is None else str(self.usd_per_native_unit)
+            ),
             "deterministic": self.deterministic,
             "note": self.note,
         }
@@ -278,13 +293,13 @@ def zenrows_snapshot(base_cpm_usd: Decimal | str | None) -> PricingSnapshot:
             rates={
                 # Multipliers are known; the money is not. A reported cost is
                 # used when it arrives, and an unreported one is UNKNOWN.
-                "basic": StrategyRate(Decimal("1"), Decimal("0"), deterministic=False),
-                "js": StrategyRate(Decimal("5"), Decimal("0"), deterministic=False),
-                "premium": StrategyRate(Decimal("10"), Decimal("0"), deterministic=False),
-                "js_premium": StrategyRate(Decimal("25"), Decimal("0"), deterministic=False),
+                "basic": StrategyRate(Decimal("1"), None, deterministic=False),
+                "js": StrategyRate(Decimal("5"), None, deterministic=False),
+                "premium": StrategyRate(Decimal("10"), None, deterministic=False),
+                "js_premium": StrategyRate(Decimal("25"), None, deterministic=False),
                 "auto": StrategyRate(
                     Decimal("1"),
-                    Decimal("0"),
+                    None,
                     deterministic=False,
                     native_upper_bound=Decimal("25"),
                 ),
@@ -340,14 +355,17 @@ def zyte_snapshot(
     """
 
     def rate(ceiling: Decimal | str | None) -> StrategyRate:
+        # No ceiling means no money figure at all — never zero. A zero would
+        # make an unpriceable Zyte call the cheapest option in the fleet.
+        unpriced = StrategyRate(Decimal("1"), None, deterministic=False)
         if ceiling is None:
-            return StrategyRate(Decimal("1"), Decimal("0"), deterministic=False)
+            return unpriced
         try:
             usd = Decimal(str(ceiling))
         except (InvalidOperation, ValueError, TypeError):
-            return StrategyRate(Decimal("1"), Decimal("0"), deterministic=False)
+            return unpriced
         if usd <= 0:
-            return StrategyRate(Decimal("1"), Decimal("0"), deterministic=False)
+            return unpriced
         return StrategyRate(
             Decimal("1"),
             usd,
@@ -466,13 +484,25 @@ class PricingBook:
         rate = self.rate(provider, strategy_id)
         return None if rate is None else rate.usd(rate.upper_bound)
 
-    def settle(self, provider: str, strategy_id: str, reported: Decimal | None) -> Cost:
+    def settle(
+        self,
+        provider: str,
+        strategy_id: str,
+        reported: Decimal | None,
+        *,
+        reported_usd: Decimal | None = None,
+    ) -> Cost:
         """Turn what the provider said — or did not say — into a Cost.
 
         This is the single place the PROVISIONAL rule is applied, so the
         condition can be read in one sitting: a provider that reports nothing
         gets a provisional ceiling only when its tariff is documented and
         deterministic. Otherwise the answer is UNKNOWN and spending stops.
+
+        ``reported_usd`` is the vendor's own money figure where one exists. It
+        takes precedence over converting native units through a plan rate,
+        because it is the bill rather than our arithmetic about the bill — and
+        it is exact even when no operator rate has been configured at all.
         """
 
         rate = self.rate(provider, strategy_id)
@@ -481,8 +511,15 @@ class PricingBook:
         )
 
         if reported is not None:
-            usd = rate.usd(reported) if rate else None
+            usd = (
+                reported_usd if reported_usd is not None else (rate.usd(reported) if rate else None)
+            )
             return Cost.of(reported, unit=unit, usd=usd)
+
+        if reported_usd is not None:
+            # Money without a native count: still exact spend, and recording it
+            # as unknown would drop a figure the vendor handed us.
+            return Cost.of(reported_usd, unit="USD", usd=reported_usd)
 
         if rate is not None and rate.deterministic:
             bound = rate.upper_bound

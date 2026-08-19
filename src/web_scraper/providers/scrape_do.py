@@ -216,12 +216,30 @@ class ScrapeDoProvider:
                 status=status,
                 retryable=True,
             )
+        if status >= 400 and HEADER_TARGET_STATUS not in headers:
+            # Scrape.do answered 4xx and said nothing about any target, so this
+            # is its refusal of OUR call. Without this branch it fell through
+            # with no target status at all, triage read the missing status as
+            # ORIGIN_DOWN — a NEUTRAL verdict — and the strategy that failed was
+            # never charged with it while the URL went back in the queue.
+            raise ProviderError(
+                kind=ProviderErrorKind.BAD_REQUEST,
+                message=f"provider rejected the request (HTTP {status})",
+                provider=self.name,
+                status=status,
+            )
 
+        target_status = _int_or_none(headers.get(HEADER_TARGET_STATUS))
         return ProviderResponse(
             provider=self.name,
             strategy_id=request.strategy_id,
-            target_status=_int_or_none(headers.get(HEADER_TARGET_STATUS)) or status,
-            provider_status=status,
+            target_status=target_status or status,
+            # Scrape.do mirrors the target's status into its own envelope, so a
+            # dead URL arrives as HTTP 404 from a provider that did its job
+            # perfectly. Copying that into provider health would report a
+            # healthy vendor as failing on every dead URL it correctly
+            # described. When it named the target's status, it worked.
+            provider_status=200 if target_status is not None else status,
             body=body,
             headers=headers,
             final_url=headers.get(HEADER_RESOLVED_URL) or request.url,

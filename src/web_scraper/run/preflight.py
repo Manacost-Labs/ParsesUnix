@@ -83,7 +83,56 @@ def preflight(config: RunConfig, *, pricing: PricingBook | None = None) -> Prefl
     checks.extend(_budget_checks(config))
     checks.extend(_pricing_checks(pricing or PricingBook()))
     checks.extend(_provider_cost_safety())
+    checks.extend(_provider_readiness(pricing or PricingBook()))
     return PreflightReport(tuple(checks))
+
+
+def _provider_readiness(pricing: PricingBook) -> list[Check]:
+    """One line per configured vendor: can it be trusted with money tonight?
+
+    Four facts, and the reason each is here rather than in a wiki:
+
+    * **configured** — a key exists, so the router may pick it;
+    * **live verified** — somebody has watched it answer a real call. Five out
+      of five adapters contained a defect that only a live call exposed, so an
+      unverified adapter is a hypothesis;
+    * **cost bounded** — a call whose price cannot be bounded settles UNKNOWN
+      and halts paid work after the first one;
+    * **tariff fresh** — a stale price is not a price.
+    """
+
+    from web_scraper.providers import LIVE_VERIFIED_AT
+    from web_scraper.run.estimate_cli import configured_providers
+
+    checks: list[Check] = []
+    stale = {snapshot.provider for snapshot in pricing.stale_snapshots()}
+    for provider in configured_providers():
+        name = provider.name
+        verified = LIVE_VERIFIED_AT.get(name)
+        priced = [
+            s.id for s in provider.strategies() if pricing.upper_bound_usd(name, s.id) is not None
+        ]
+        unpriced = [s.id for s in provider.strategies() if s.id not in priced]
+        problems = []
+        if verified is None:
+            problems.append("never verified against a live call")
+        if unpriced:
+            problems.append(f"unpriceable strategies: {', '.join(sorted(unpriced))}")
+        if name in stale:
+            problems.append("tariff is stale")
+        checks.append(
+            Check(
+                f"provider_{name}",
+                not problems,
+                (
+                    f"configured, live verified {verified}, {len(priced)} priced strategies"
+                    if not problems
+                    else "; ".join(problems)
+                ),
+                severity="warning",
+            )
+        )
+    return checks
 
 
 def _provider_cost_safety() -> list[Check]:

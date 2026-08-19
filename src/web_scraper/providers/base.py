@@ -55,29 +55,32 @@ class ProviderCost:
 
     ``attributed`` is False when the provider told us nothing. Such a call is
     still spend — it is reported, never counted as free.
+
+    ``usd`` is for the rare vendor that states the money itself. ZenRows does,
+    in ``X-Request-Cost``, and its figure beats anything we could derive: a
+    conversion through a plan rate is our arithmetic about their bill, while
+    this is their bill. Everyone else leaves it ``None`` and the tariff book
+    converts.
     """
 
     credits: Decimal = Decimal("0")
     attributed: bool = True
     currency: str = "credits"
     remaining: Decimal | None = None
+    usd: Decimal | None = None
 
     @classmethod
     def unattributed(cls) -> ProviderCost:
         return cls(credits=Decimal("0"), attributed=False)
 
     @classmethod
-    def parse(cls, raw: Any, *, remaining: Any = None) -> ProviderCost:
+    def parse(cls, raw: Any, *, remaining: Any = None, usd: Any = None) -> ProviderCost:
         try:
             credits = Decimal(str(raw))
         except (InvalidOperation, ValueError, TypeError):
             return cls.unattributed()
-        left: Decimal | None
-        try:
-            left = Decimal(str(remaining)) if remaining is not None else None
-        except (InvalidOperation, ValueError, TypeError):
-            left = None
-        return cls(credits=credits, attributed=True, remaining=left)
+        left = _decimal_or_none(remaining)
+        return cls(credits=credits, attributed=True, remaining=left, usd=_decimal_or_none(usd))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -85,7 +88,17 @@ class ProviderCost:
             "attributed": self.attributed,
             "currency": self.currency,
             "remaining": str(self.remaining) if self.remaining is not None else None,
+            "usd": str(self.usd) if self.usd is not None else None,
         }
+
+
+def _decimal_or_none(raw: Any) -> Decimal | None:
+    if raw is None:
+        return None
+    try:
+        return Decimal(str(raw))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
 
 
 @dataclass(frozen=True)

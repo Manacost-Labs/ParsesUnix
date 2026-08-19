@@ -204,7 +204,14 @@ class MultiProviderEscalator:
         #    answer is UNKNOWN and spending stops. That rule lives in the pricing
         #    book so it is stated once, not re-derived per adapter.
         reported = response.cost.credits if response.cost.attributed else None
-        cost = self.pricing.settle(provider_name, strategy_id, reported)
+        cost = self.pricing.settle(
+            provider_name,
+            strategy_id,
+            reported,
+            # A vendor that states its own dollars settles exactly, whether or
+            # not an operator ever configured a rate for it.
+            reported_usd=response.cost.usd if response.cost.attributed else None,
+        )
         # A provisional cost is settled at its CEILING, so the ledger never
         # under-counts: the true spend is at most what we recorded.
         self.budget.settle(reservation, actual_credits=cost.credits)

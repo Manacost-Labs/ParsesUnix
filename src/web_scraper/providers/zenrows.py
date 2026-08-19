@@ -240,7 +240,7 @@ class ZenRowsProvider:
     def fetch_with_capture(
         self, request: ProviderRequest
     ) -> tuple[ProviderResponse, list[dict[str, Any]]]:
-        """Fetch, and return whatever network traffic the vendor reported."""
+        """Fetch, and return the captured network entries in discovery's shape."""
 
         if not self.configured:
             raise ProviderError(
@@ -269,7 +269,7 @@ class ZenRowsProvider:
         if query.get("json_response") == "true":
             body, captured = _split_json_response(body, provider=self.name)
 
-        return ProviderResponse(
+        response = ProviderResponse(
             provider=self.name,
             strategy_id=request.strategy_id,
             # With original_status=true the envelope status IS the target's.
@@ -287,7 +287,12 @@ class ZenRowsProvider:
             truncated=result.truncated,
             from_cache=False,
             content_age_seconds=None,
-        ), captured
+        )
+        # Both capture-capable adapters hand back entries in DISCOVERY's shape,
+        # not their own wire format. Two methods with the same name returning
+        # two different things is how a caller silently feeds a vendor envelope
+        # to something expecting observations.
+        return response, self.observed_requests(response, captured)
 
     def _raise_for_provider_failure(self, result: Any) -> None:
         """Separate ZenRows' own failures from the target's.
@@ -444,24 +449,12 @@ def _cost_from(headers: dict[str, str]) -> ProviderCost:
     if credits is None and usd_raw is None:
         return ProviderCost.unattributed()
 
-    usd: Decimal | None = None
-    if usd_raw is not None:
-        try:
-            usd = Decimal(usd_raw)
-        except (ArithmeticError, ValueError):
-            usd = None
-
-    # Prefer credits as the native amount; fall back to the dollar figure when
-    # only that is present.
+    # Credits are the native amount; the dollar figure rides along and is what
+    # settlement prefers. An earlier version parsed the dollars and then built a
+    # cost without them, so the one vendor that states its own money was the one
+    # vendor whose money we discarded.
     native = credits if credits is not None else usd_raw
-    cost = ProviderCost.parse(native)
-    return (
-        cost
-        if usd is None
-        else ProviderCost(
-            credits=cost.credits, attributed=cost.attributed, remaining=cost.remaining
-        )
-    )
+    return ProviderCost.parse(native, usd=usd_raw)
 
 
 def _content_headers(headers: dict[str, str]) -> dict[str, str]:

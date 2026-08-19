@@ -746,6 +746,11 @@ class CaptureSurfaceTests(unittest.TestCase):
         response, captured = provider.fetch_with_capture(ProviderRequest(url=URL, strategy_id="js"))
         self.assertEqual(response.body, b"<html>page</html>")
         self.assertEqual(len(captured), 1)
+        # Discovery's shape, not ZenRows' wire format: the calibration harness
+        # and the runner feed both providers' captures to one collector.
+        self.assertEqual(captured[0]["url"], "https://example.com/api/x")
+        self.assertIn("resource_type", captured[0])
+        self.assertIsInstance(captured[0]["body"], bytes)
 
     def test_zenrows_fetch_still_satisfies_the_plain_contract(self) -> None:
         http = FakeHTTP(body=b"<html>x</html>", headers={"x-request-id": "r"})

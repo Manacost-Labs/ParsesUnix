@@ -359,6 +359,63 @@ class ProviderStatsStore:
                 ),
             )
 
+    def merge(self, incoming: ProviderStrategyStats) -> ProviderStrategyStats:
+        """Fold an externally-gathered record into this store.
+
+        Exists for one caller: promoting calibration evidence an operator has
+        reviewed. Replaying the attempts one by one through :meth:`record` was
+        the obvious alternative and is wrong — it would restamp every
+        observation with today's time, so a month-old calibration would arrive
+        looking freshly measured and skip the ageing that keeps stale evidence
+        from ruling forever.
+
+        Counters add. Timestamps take the later of the two. The EWMA is combined
+        in proportion to scored attempts, which is the closest honest answer:
+        the true value depends on the interleaving of two histories we cannot
+        reconstruct, and weighting by evidence at least cannot be dominated by
+        whichever record happened to be merged last.
+        """
+
+        current = self.get(incoming.key)
+        if current is None:
+            self._write(incoming)
+            return incoming
+
+        scored = current.scored_attempts + incoming.scored_attempts
+        if scored:
+            ewma = (
+                current.ewma_success * current.scored_attempts
+                + incoming.ewma_success * incoming.scored_attempts
+            ) / scored
+        else:
+            ewma = current.ewma_success
+
+        attempts = current.attempts + incoming.attempts
+        latency = (
+            (current.latency_ms * current.attempts + incoming.latency_ms * incoming.attempts)
+            / attempts
+            if attempts
+            else current.latency_ms
+        )
+
+        merged = ProviderStrategyStats(
+            key=incoming.key,
+            attempts=attempts,
+            scored_attempts=scored,
+            validated_successes=current.validated_successes + incoming.validated_successes,
+            blocks=current.blocks + incoming.blocks,
+            provider_errors=current.provider_errors + incoming.provider_errors,
+            neutral_outcomes=current.neutral_outcomes + incoming.neutral_outcomes,
+            ewma_success=ewma,
+            latency_ms=latency,
+            known_cost=current.known_cost + incoming.known_cost,
+            unknown_cost_calls=current.unknown_cost_calls + incoming.unknown_cost_calls,
+            last_success=_later(current.last_success, incoming.last_success),
+            last_failure=_later(current.last_failure, incoming.last_failure),
+        )
+        self._write(merged)
+        return merged
+
     def all_stats(self) -> list[ProviderStrategyStats]:
         with closing(self._connect()) as conn:
             rows = conn.execute("SELECT * FROM provider_stats ORDER BY provider, strategy_id")
@@ -374,6 +431,11 @@ class ProviderStatsStore:
                 )
                 for row in rows
             ]
+
+
+def _later(left: float | None, right: float | None) -> float | None:
+    stamps = [s for s in (left, right) if s is not None]
+    return max(stamps) if stamps else None
 
 
 def _from_row(key: ProviderStrategyKey, row: sqlite3.Row) -> ProviderStrategyStats:

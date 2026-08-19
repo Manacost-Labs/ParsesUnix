@@ -23,6 +23,14 @@ gate; they are evidence for a human.
     python tools/benchmark.py synthetic --urls 10000
     python tools/benchmark.py real --urls 100
     python tools/benchmark.py discovery-overhead
+    python tools/benchmark.py providers            # provider calibration, plan only
+    python tools/benchmark.py providers --live     # ...and actually call them
+
+The ``providers`` workload is the one that spends money, so it lives in the
+package rather than here — ``web_scraper.calibration``, installed as
+``ws-benchmark``. This file forwards to it so both doors open on the same room:
+a second implementation of the same benchmark is how two answers to one question
+appear.
 """
 
 from __future__ import annotations
@@ -415,10 +423,17 @@ def discovery_overhead(observations: int = 5000) -> BenchmarkResult:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("workload", choices=("synthetic", "real", "discovery-overhead"))
+    parser.add_argument(
+        "workload", choices=("synthetic", "real", "discovery-overhead", "providers")
+    )
     parser.add_argument("--urls", type=int, default=1000)
     parser.add_argument("--json", action="store_true")
-    args = parser.parse_args(argv)
+    args, rest = parser.parse_known_args(argv)
+
+    if args.workload == "providers":
+        from web_scraper.calibration.cli import main as calibration_main
+
+        return calibration_main(["providers", *rest])
 
     if args.workload == "synthetic":
         result = synthetic(args.urls)
