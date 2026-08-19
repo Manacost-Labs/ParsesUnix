@@ -20,6 +20,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("config", type=Path, help="Path to a run-config JSON file.")
     parser.add_argument("--full-review", action="store_true", help="Ignore freshness intervals.")
     parser.add_argument("--report", type=Path, help="Write the run report JSON to this path.")
+    parser.add_argument(
+        "--estimate-cost",
+        action="store_true",
+        help="Report what the paid work would cost and exit. Makes no paid calls.",
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -42,6 +47,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
         return 2
 
+    if args.estimate_cost:
+        return _estimate(config, runner)
+
     outcome = runner.run()
     payload = {"ok": True, "processed": outcome.processed, "report": outcome.report}
     if args.report:
@@ -50,6 +58,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
+
+
+def _estimate(config: RunConfig, runner: Runner) -> int:
+    """Answer "what would this cost?" without spending anything."""
+
+    from web_scraper.run.estimate_cli import build_estimate, unresolved_from_queue
+
+    unresolved = unresolved_from_queue(
+        runner.queue,
+        profile_site=runner.profile.site,
+        url_class_for=runner.profile.class_for_url,
+    )
+    counts = runner.queue.counts_by_status()
+    estimate = build_estimate(
+        unresolved,
+        state_dir=config.state_dir,
+        daily_credit_limit=config.daily_credit_limit,
+        free_url_count=sum(counts.values()),
+    )
+    print(json.dumps({"ok": True, "estimate": estimate.to_dict()}, ensure_ascii=False, indent=2))
+    # A run that cannot afford its own holds should not be started by a cron job
+    # that only checks the exit status.
+    return 0 if estimate.fits_budget is not False else 1
 
 
 if __name__ == "__main__":
