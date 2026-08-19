@@ -134,7 +134,11 @@ class ZenRowsSecrecyTests(unittest.TestCase):
         self.assertNotIn("SECRETKEY", json.dumps(query))
 
     def test_the_key_never_appears_in_an_exception(self) -> None:
-        http = FakeHTTP(status=500)
+        http = FakeHTTP(
+            status=500,
+            body=json.dumps({"code": "SRV001", "title": "boom"}).encode(),
+            headers={"content-type": "application/problem+json"},
+        )
         provider = ZenRowsProvider(api_key="SECRETKEY", opener=http)
         with self.assertRaises(ProviderError) as caught:
             provider.fetch(ProviderRequest(url=URL, strategy_id="basic"))
@@ -152,29 +156,55 @@ class ZenRowsSecrecyTests(unittest.TestCase):
 
 
 class ZenRowsStatusTests(unittest.TestCase):
-    """With original_status=true, provider and target status share a channel.
+    """Provider failure vs target answer, decided by the error CODE prefix.
 
-    X-Request-Id is the discriminator: ZenRows sets it on requests it processed,
-    so a 4xx carrying one is the site talking and a 4xx without one is ZenRows.
-    Getting this backwards records a billing failure as a dead URL — the exact
-    confusion that cost us on Bright Data.
+    MEASURED 2026-08-19, after two wrong rules that live calls killed:
+
+    1. "X-Request-Id is set only on processed requests" — false, ZenRows sets it
+       on its own errors too.
+    2. "application/problem+json means a provider error" — also false, ZenRows
+       describes the TARGET's 404 in that same format.
+
+    The code prefix is the real signal, and the billing agrees: REQS* is
+    ZenRows refusing our request and costs 0 credits, RESP* is the target
+    answering and costs 1.
     """
 
-    def fetch(self, status, headers, body=b"x"):
-        http = FakeHTTP(status=status, body=body, headers=headers)
+    def problem(self, status, code, title="something"):
+        body = json.dumps(
+            {"code": code, "title": title, "detail": title, "status": status}
+        ).encode()
+        return FakeHTTP(
+            status=status,
+            body=body,
+            headers={
+                "content-type": "application/problem+json",
+                "x-request-id": "r1",
+                "x-request-cost": "0",
+            },
+        )
+
+    def fetch(self, http):
         return ZenRowsProvider(api_key="k", opener=http).fetch(
             ProviderRequest(url=URL, strategy_id="basic")
         )
 
-    def test_a_target_200_is_a_success(self) -> None:
-        response = self.fetch(200, {"x-request-id": "r1", "x-request-cost": "1"})
+    def test_a_plain_200_is_the_sites_answer(self) -> None:
+        http = FakeHTTP(
+            status=200,
+            body=b"<html>ok</html>",
+            headers={"x-request-id": "r1", "x-request-credits": "1"},
+        )
+        response = self.fetch(http)
         self.assertEqual(response.target_status, 200)
         self.assertEqual(response.provider_status, 200)
 
-    def test_a_target_404_is_a_dead_url_not_a_provider_fault(self) -> None:
-        response = self.fetch(404, {"x-request-id": "r1", "x-request-cost": "1"}, b"gone")
+    def test_a_target_404_reaches_triage_as_a_dead_url(self) -> None:
+        # The defect this prevents: raising RESP002 as a provider error would
+        # leave the URL unquarantined, re-fetched and re-billed every run.
+        http = self.problem(404, "RESP002", "Page not found (RESP002)")
+        response = self.fetch(http)
         self.assertEqual(response.target_status, 404)
-        self.assertEqual(response.provider_status, 200, "ZenRows did its job")
         verdict = classify_response(
             status=response.target_status,
             body=response.body,
@@ -183,34 +213,44 @@ class ZenRowsStatusTests(unittest.TestCase):
         ).verdict
         self.assertEqual(verdict, Verdict.DEAD_URL)
 
-    def test_a_target_410_is_also_the_sites_answer(self) -> None:
-        response = self.fetch(410, {"x-request-id": "r1"})
+    def test_a_target_410_is_also_passed_through(self) -> None:
+        response = self.fetch(self.problem(410, "RESP003", "Gone"))
         self.assertEqual(response.target_status, 410)
 
-    def test_a_target_429_is_the_sites_rate_limit(self) -> None:
-        response = self.fetch(429, {"x-request-id": "r1"})
-        self.assertEqual(response.target_status, 429)
-
-    def test_a_401_without_a_request_id_is_our_credentials(self) -> None:
+    def test_a_forbidden_domain_is_our_request_not_the_site(self) -> None:
+        # REQS001, measured live: ZenRows refuses some domains outright, and
+        # that is emphatically not a verdict about the target.
         with self.assertRaises(ProviderError) as caught:
-            self.fetch(401, {})
+            self.fetch(self.problem(400, "REQS001", "Requests to this domain are forbidden"))
+        self.assertEqual(caught.exception.kind, ProviderErrorKind.BAD_REQUEST)
+        self.assertIn("REQS001", caught.exception.message)
+
+    def test_bad_credentials_are_an_auth_failure(self) -> None:
+        with self.assertRaises(ProviderError) as caught:
+            self.fetch(self.problem(401, "AUTH001", "Invalid API key"))
         self.assertEqual(caught.exception.kind, ProviderErrorKind.AUTH)
 
-    def test_a_402_without_a_request_id_is_our_quota(self) -> None:
+    def test_exhausted_credits_are_a_quota_failure(self) -> None:
         with self.assertRaises(ProviderError) as caught:
-            self.fetch(402, {})
+            self.fetch(self.problem(402, "BILL001", "Out of credits"))
         self.assertEqual(caught.exception.kind, ProviderErrorKind.QUOTA)
 
-    def test_a_429_without_a_request_id_is_our_rate_limit(self) -> None:
+    def test_a_rate_limit_is_retryable(self) -> None:
         with self.assertRaises(ProviderError) as caught:
-            self.fetch(429, {"concurrency-limit": "20"})
+            self.fetch(self.problem(429, "RATE001", "Too many requests"))
         self.assertEqual(caught.exception.kind, ProviderErrorKind.QUOTA)
         self.assertTrue(caught.exception.retryable)
 
     def test_a_provider_5xx_is_a_provider_fault(self) -> None:
         with self.assertRaises(ProviderError) as caught:
-            self.fetch(503, {})
+            self.fetch(self.problem(503, "SRV001", "Service unavailable"))
         self.assertEqual(caught.exception.kind, ProviderErrorKind.PROVIDER_FAULT)
+
+    def test_a_non_problem_body_is_never_treated_as_an_error(self) -> None:
+        # A site can legitimately answer 403 with HTML. That is its answer.
+        http = FakeHTTP(status=403, body=b"<html>forbidden</html>", headers={"x-request-id": "r1"})
+        response = self.fetch(http)
+        self.assertEqual(response.target_status, 403)
 
 
 class ZenRowsCostTests(unittest.TestCase):
@@ -220,14 +260,29 @@ class ZenRowsCostTests(unittest.TestCase):
             ProviderRequest(url=URL, strategy_id="basic")
         )
 
-    def test_the_documented_cost_header_is_used(self) -> None:
-        response = self.fetch({"x-request-id": "r", "x-request-cost": "5"})
+    def test_credits_are_taken_from_the_credits_header(self) -> None:
+        # MEASURED: X-Request-Credits is the credit count and X-Request-Cost is
+        # dollars — a basic call reported 1 and 0.001, a js call 5 and 0.005.
+        response = self.fetch(
+            {"x-request-id": "r", "x-request-credits": "5", "x-request-cost": "0.005"}
+        )
         self.assertTrue(response.cost.attributed)
         self.assertEqual(response.cost.credits, Decimal("5"))
+
+    def test_the_dollar_figure_is_used_when_credits_are_absent(self) -> None:
+        response = self.fetch({"x-request-id": "r", "x-request-cost": "0.001"})
+        self.assertTrue(response.cost.attributed)
 
     def test_a_missing_cost_header_is_unknown_not_zero(self) -> None:
         response = self.fetch({"x-request-id": "r"})
         self.assertFalse(response.cost.attributed)
+
+    def test_a_billed_zero_is_a_measured_zero(self) -> None:
+        # A refused request reports 0 credits, and that is true rather than
+        # unknown: the vendor told us it did not charge.
+        response = self.fetch({"x-request-id": "r", "x-request-credits": "0"})
+        self.assertTrue(response.cost.attributed)
+        self.assertEqual(response.cost.credits, Decimal("0"))
 
     def test_the_request_id_is_carried(self) -> None:
         self.assertEqual(self.fetch({"x-request-id": "abc123"}).request_id, "abc123")

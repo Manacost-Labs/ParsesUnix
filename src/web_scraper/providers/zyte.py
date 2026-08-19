@@ -378,7 +378,13 @@ def _content_type_of(headers: Any) -> str:
 
 
 def _headers_of(envelope: dict[str, Any]) -> dict[str, str]:
-    """Rebuild the few response headers triage reads."""
+    """Rebuild the few response headers triage reads, in canonical casing.
+
+    MEASURED: Zyte returns header names lowercased (``content-type``). Storing
+    them as they arrive meant a consumer asking for ``Content-Type`` found
+    nothing, and content detection fell back to sniffing the body instead of
+    using the type the server actually declared.
+    """
 
     out: dict[str, str] = {}
     raw = envelope.get(FIELD_HTTP_HEADERS)
@@ -387,7 +393,7 @@ def _headers_of(envelope: dict[str, Any]) -> dict[str, str]:
             if isinstance(item, dict) and item.get("name"):
                 name = str(item["name"])
                 if name.lower() in {"content-type", "content-language", "etag", "last-modified"}:
-                    out[name] = str(item.get("value", ""))
+                    out[name.title()] = str(item.get("value", ""))
     if "Content-Type" not in out and FIELD_BROWSER_HTML in envelope:
         # A rendered page is HTML by construction; saying so keeps content
         # detection from having to guess.

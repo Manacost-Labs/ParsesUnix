@@ -14,12 +14,34 @@ carries the target URL and the strategy, never the URL we actually called.
 
 **With ``original_status=true`` the envelope status IS the target status.** That
 is what we want — triage needs the site's real answer — but it removes the
-separation the other adapters rely on: a 401 could be the site refusing the
-visit or ZenRows refusing our key. The distinguishing signal is
-``X-Request-Id``: ZenRows sets it on requests it actually processed, so a 4xx
-*with* that header is the site talking and a 4xx *without* it is ZenRows.
-Getting this backwards would record a billing failure as a dead URL, which is
-precisely the confusion that cost us on Bright Data.
+separation the other adapters rely on: a 400 could be the site rejecting the
+request or ZenRows rejecting it.
+
+MEASURED 2026-08-19, over three iterations, each of which killed the previous
+rule:
+
+1. *X-Request-Id is set only on processed requests* — false. ZenRows sets it on
+   its own errors too.
+2. *``application/problem+json`` means a provider error* — also false. ZenRows
+   describes the TARGET's 404 in the same format.
+3. The **error code prefix** is the real discriminator, and the billing agrees
+   with it:
+
+   ==========  ======================================  =========
+   code        meaning                                 billed
+   ==========  ======================================  =========
+   ``REQS*``   ZenRows refused OUR request             0 credits
+   ``RESP*``   the target responded that way           1 credit
+   ==========  ======================================  =========
+
+A ``RESP002`` is a real 404 from the site and must reach triage as ``DEAD_URL``.
+Raising it as a provider error instead would leave the URL unquarantined and
+re-fetched — and re-billed — on every run, which is the Bright Data defect
+wearing a different hat.
+
+The vendor reports both units: ``X-Request-Credits`` is the credit count and
+``X-Request-Cost`` is dollars. Both are recorded, so no multiplier arithmetic is
+needed to know what a call cost.
 """
 
 from __future__ import annotations
@@ -52,6 +74,16 @@ HEADER_REQUEST_ID = "x-request-id"
 HEADER_FINAL_URL = "zr-final-url"
 HEADER_CONCURRENCY_LIMIT = "concurrency-limit"
 HEADER_CONCURRENCY_REMAINING = "concurrency-remaining"
+HEADER_CREDITS = "x-request-credits"
+
+#: MEASURED: ZenRows describes both its own failures AND the target's error
+#: statuses as RFC 7807 problem details, so the content type alone decides
+#: nothing. The code prefix does.
+PROBLEM_CONTENT_TYPE = "application/problem+json"
+
+#: Codes describing what the TARGET did. The envelope status is the site's, the
+#: request was billed, and triage must judge it like any other response.
+TARGET_CODE_PREFIX = "RESP"
 
 #: Documented credit multipliers. Used for PLANNING only — a reported cost
 #: always wins, because a multiplier is what we expect and the header is what
@@ -230,7 +262,7 @@ class ZenRowsProvider:
         )
 
         request_id = result.headers.get(HEADER_REQUEST_ID)
-        self._raise_for_provider_failure(result.status, result.headers, request_id)
+        self._raise_for_provider_failure(result)
 
         body = result.body
         captured: list[dict[str, Any]] = []
@@ -257,64 +289,69 @@ class ZenRowsProvider:
             content_age_seconds=None,
         ), captured
 
-    def _raise_for_provider_failure(
-        self, status: int, headers: dict[str, str], request_id: str | None
-    ) -> None:
+    def _raise_for_provider_failure(self, result: Any) -> None:
         """Separate ZenRows' own failures from the target's.
 
-        With ``original_status=true`` both arrive as the envelope status, so the
-        header is the only discriminator: ZenRows sets ``X-Request-Id`` on
-        requests it processed. A 4xx carrying one is the site answering; a 4xx
-        without one is ZenRows refusing us.
-
-        Documented status semantics are not published for this case, so the rule
-        is stated here as the assumption it is, and the live acceptance test
-        exercises both sides of it.
+        The error code prefix decides it — see the module docstring for the two
+        rules this replaced, both of which a live call disproved. The lesson is
+        worth keeping next to the code: a rule invented from plausible reasoning
+        about a vendor is a hypothesis, and two of mine were false.
         """
 
-        if request_id:
-            return  # ZenRows processed it; whatever the status is, it is the site's
+        content_type = result.headers.get("content-type", "").split(";")[0].strip().lower()
+        if content_type != PROBLEM_CONTENT_TYPE:
+            return  # the site answered normally; its status is the target status
+
+        code = title = detail = ""
+        try:
+            problem = result.json(provider=self.name)
+            if isinstance(problem, dict):
+                code = str(problem.get("code") or "")
+                title = str(problem.get("title") or "")
+                detail = str(problem.get("detail") or "")
+        except ProviderError:
+            pass
+
+        if code.startswith(TARGET_CODE_PREFIX):
+            # The target answered — with a 404, a 410, whatever. ZenRows merely
+            # described it, and billed us for the trip. Triage judges it.
+            return
+
+        message = " ".join(part for part in (code, title or detail) if part).strip()
+        status = result.status
 
         if status in {401, 403}:
             raise ProviderError(
                 kind=ProviderErrorKind.AUTH,
-                message=f"provider rejected the credentials (HTTP {status})",
+                message=message or f"provider rejected the credentials (HTTP {status})",
                 provider=self.name,
                 status=status,
             )
-        if status == 402:
+        if status in {402, 429}:
             raise ProviderError(
                 kind=ProviderErrorKind.QUOTA,
-                message="payment required: plan credits exhausted",
+                message=message or "plan credits or rate limit exhausted",
                 provider=self.name,
                 status=status,
-            )
-        if status == 429:
-            raise ProviderError(
-                kind=ProviderErrorKind.QUOTA,
-                message=(
-                    "provider rate limit or concurrency ceiling reached "
-                    f"(limit {headers.get(HEADER_CONCURRENCY_LIMIT, '?')})"
-                ),
-                provider=self.name,
-                status=status,
-                retryable=True,
-            )
-        if status == 400:
-            raise ProviderError(
-                kind=ProviderErrorKind.BAD_REQUEST,
-                message="provider rejected the request parameters",
-                provider=self.name,
-                status=status,
+                retryable=status == 429,
             )
         if status >= 500:
             raise ProviderError(
                 kind=ProviderErrorKind.PROVIDER_FAULT,
-                message=f"provider error (HTTP {status})",
+                message=message or f"provider error (HTTP {status})",
                 provider=self.name,
                 status=status,
                 retryable=True,
             )
+        # 400/422 and anything else described as a problem: our request, not the
+        # site. REQS001 — "requests to this domain are forbidden" — arrives here,
+        # and it is emphatically not a verdict about the target.
+        raise ProviderError(
+            kind=ProviderErrorKind.BAD_REQUEST,
+            message=message or f"provider rejected the request (HTTP {status})",
+            provider=self.name,
+            status=status,
+        )
 
     # -- discovery ---------------------------------------------------------
 
@@ -391,12 +428,40 @@ def _split_json_response(body: bytes, *, provider: str) -> tuple[bytes, list[dic
 
 
 def _cost_from(headers: dict[str, str]) -> ProviderCost:
-    """Documented header, used as reported. Absent means unknown, never zero."""
+    """Both units, as the vendor reports them.
 
-    reported = headers.get(HEADER_COST)
-    if reported is None:
+    MEASURED: ``X-Request-Credits`` is the credit count and ``X-Request-Cost``
+    is dollars — a basic call reported 1 credit and 0.001 USD, a js call 5 and
+    0.005. Recording both means no multiplier arithmetic is needed to know what
+    a call cost, and the canonical-money comparison uses the vendor's own figure
+    rather than a plan rate we inferred.
+
+    Absent means unknown, never zero.
+    """
+
+    credits = headers.get(HEADER_CREDITS)
+    usd_raw = headers.get(HEADER_COST)
+    if credits is None and usd_raw is None:
         return ProviderCost.unattributed()
-    return ProviderCost.parse(reported)
+
+    usd: Decimal | None = None
+    if usd_raw is not None:
+        try:
+            usd = Decimal(usd_raw)
+        except (ArithmeticError, ValueError):
+            usd = None
+
+    # Prefer credits as the native amount; fall back to the dollar figure when
+    # only that is present.
+    native = credits if credits is not None else usd_raw
+    cost = ProviderCost.parse(native)
+    return (
+        cost
+        if usd is None
+        else ProviderCost(
+            credits=cost.credits, attributed=cost.attributed, remaining=cost.remaining
+        )
+    )
 
 
 def _content_headers(headers: dict[str, str]) -> dict[str, str]:
