@@ -16,6 +16,54 @@ from web_scraper.diagnose.analyze import Diagnosis, diagnose_attempts, diagnose_
 from web_scraper.queue import QueueStore
 
 
+def _compare_routes(args: argparse.Namespace) -> int:
+    """Answer "should this class move off the browser?" from stored evidence.
+
+    Reads only. A comparison that fetched would be measuring today's network
+    rather than the evidence the runs actually accumulated.
+    """
+
+    from web_scraper.diagnose.routes import compare_routes, describe_comparisons
+    from web_scraper.discovery import DiscoveryStore
+
+    state_dir = args.state_dir or (args.queue.parent if args.queue else None)
+    if state_dir is None:
+        print(
+            json.dumps({"ok": False, "error": "--routes needs --state-dir"}),
+            file=sys.stderr,
+        )
+        return 2
+
+    path = Path(state_dir) / "discovery.sqlite3"
+    if not path.exists():
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "comparisons": [],
+                    "note": (
+                        "no discovery evidence yet; it accumulates across runs that render pages"
+                    ),
+                }
+            )
+        )
+        return 0
+
+    store = DiscoveryStore(path)
+    comparisons = compare_routes(store.all_evidence())
+    if args.json:
+        print(
+            json.dumps(
+                {"ok": True, "comparisons": [c.to_dict() for c in comparisons]},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+    else:
+        print(describe_comparisons(comparisons))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -31,7 +79,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--samples", type=int, default=3, help="Sample URLs per group.")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--routes",
+        action="store_true",
+        help=(
+            "Compare the current route against validated API candidates discovered "
+            "in previous runs. Reads stored evidence; makes no fetches."
+        ),
+    )
     args = parser.parse_args(argv)
+
+    if args.routes:
+        return _compare_routes(args)
 
     try:
         if args.attempts_json is not None:

@@ -31,21 +31,33 @@ from web_scraper.discovery.collector import (
     profile_route_draft,
     summarise,
 )
+from web_scraper.discovery.store import (
+    DiscoveryStore,
+    Evidence,
+    EvidenceState,
+    evidence_to_candidate,
+    page_fingerprint,
+)
 
 __all__ = [
     "CandidateVerdict",
     "DiscoveryCollector",
+    "DiscoveryStore",
+    "Evidence",
+    "EvidenceState",
     "ObservedRequest",
     "PaginationHint",
     "RouteCandidate",
     "SchemaSignature",
     "describe_report",
+    "evidence_to_candidate",
     "find_matching_fields",
     "graphql_operation_of",
     "is_noise",
     "looks_like_api",
     "normalize_endpoint",
     "observed_from_mapping",
+    "page_fingerprint",
     "pagination_hint_of",
     "profile_route_draft",
     "redact_url",

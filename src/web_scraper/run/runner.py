@@ -22,7 +22,12 @@ from typing import Any
 
 from web_scraper.budget import BudgetLedger
 from web_scraper.contracts import Result, Verdict
-from web_scraper.discovery import DiscoveryCollector, observed_from_mapping, summarise
+from web_scraper.discovery import (
+    DiscoveryCollector,
+    DiscoveryStore,
+    observed_from_mapping,
+    summarise,
+)
 from web_scraper.extract import extract_fields, run_quorum
 from web_scraper.fetchers import CircuitBreaker, FetchGateway, RawResponse
 from web_scraper.fetchers.browser_pool import BrowserPool
@@ -158,6 +163,13 @@ class Runner:
         # whole run, which is the point: one page proves nothing, and the
         # threshold for VALIDATED is only reachable once several pages of the
         # same class have been rendered.
+        # Evidence outlives the run. Without this the threshold for VALIDATED is
+        # approached and forgotten nightly.
+        self._discovery_store = (
+            DiscoveryStore(config.state_dir / "discovery.sqlite3", now=wall_clock)
+            if config.discover_api
+            else None
+        )
         self._discovery = (
             DiscoveryCollector(
                 wanted_fields=self._critical_fields(),
@@ -607,7 +619,23 @@ class Runner:
         if self._discovery is None:
             return {}
         candidates = self._discovery.candidates()
+
+        # Fold this run's observations into the durable evidence, then report
+        # what the accumulated evidence says — not just what this run saw.
+        if self._discovery_store is not None:
+            for candidate in candidates:
+                pages = self._pages_for(candidate)
+                self._discovery_store.record(
+                    candidate,
+                    domain=self.profile.site,
+                    url_class=self._class_of(candidate),
+                    source_pages=pages,
+                )
+            self._discovery_store.prune()
+
         report = summarise(candidates)
+        if self._discovery_store is not None:
+            report["persisted"] = self._discovery_store.summary()
         rendered = self.metrics.by_level.get("L2", 0)
         report["browser_renders_this_run"] = rendered
         report["api_routes_discovered"] = len(candidates)
@@ -631,6 +659,20 @@ class Runner:
                 )
             )
         return report
+
+    def _pages_for(self, candidate: Any) -> list[str]:
+        """Which source pages produced this candidate, for the diversity count."""
+
+        seen = getattr(self._discovery, "_seen", {}) if self._discovery else {}
+        entry = seen.get(candidate.identity)
+        return sorted(getattr(entry, "pages", ()) or ())
+
+    def _class_of(self, candidate: Any) -> str:
+        for page in self._pages_for(candidate):
+            url_class = self.profile.class_for_url(page)
+            if url_class is not None:
+                return url_class.name
+        return ""
 
     def _recover_budget(self) -> None:
         """Resolve reservations from a crashed process, and alert if money is lost."""
