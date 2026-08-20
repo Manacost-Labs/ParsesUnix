@@ -5,10 +5,11 @@
 
 ## [Unreleased]
 
-Кандидат в первый production-релиз. Тег не поставлен: см.
-[`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) — предлагается
-`v0.9.0` как release candidate, а `v1.0.0` после живой проверки Reddit и
-публичного пути X.
+## [0.9.0] - 2026-08-20
+
+Первый production candidate. `v1.0.0` остаётся заблокирован живой проверкой
+Reddit и публичного пути X, описанной в
+[`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md).
 
 ### Added
 
@@ -70,6 +71,11 @@
 
 ### Fixed
 
+- `GatewayOutcome` использует общий `PaidAttempt.cost` и не падает на
+  multi-provider результате.
+- Run config строго проверяет boolean, числовые границы и неизвестные поля;
+  строка `"false"` больше не может включить `allow_private`.
+- Поставляемый corpus снова проходит stdlib-only CI без обязательного PyYAML.
 - Неизвестная стоимость превращалась в ноль в трёх местах.
 - Тело ответа платного пути читалось без предела.
 - Свежесть считалась по `min(max_age)` для всех классов URL.
@@ -113,6 +119,8 @@
 
 ### Security
 
+- Платные провайдеры требуют явного ordered allowlist; credentials сами по себе
+  больше не включают Bright Data или другой адаптер.
 - Ограничение размера тела на платном пути.
 - Редакция секретов в query найденных маршрутов.
 - Кандидаты с `Authorization`/куки отвергаются.
