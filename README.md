@@ -152,6 +152,65 @@ ws-profile validate profiles/example.yaml
 
 ---
 
+## Встраивание в существующий парсер
+
+Если приложение уже само управляет очередями и публикацией, оно может
+использовать ParsesUnix только как строгий транспортный слой. В таком режиме
+ожидаемый формат и доказательство полезного содержимого задаются явно:
+
+```python
+from web_scraper import ResponseContract, fetch_validated
+from web_scraper.fetchers import UrllibTransport
+
+contract = ResponseContract.json(
+    required_json_paths=("decks.0.archetypeId", "decks.0.games"),
+)
+result = fetch_validated(
+    UrllibTransport(),
+    "https://data.example/decks.json",
+    contract,
+    headers={"Accept": "application/json"},
+)
+
+if result.transport_validated:
+    candidate = result.response.body  # затем прикладной parser + publication gate
+else:
+    diagnostics = result.telemetry()  # без URL query, headers и body
+```
+
+Для SSR HTML вместо JSON path требуется канарейка, подтверждающая, что пришли
+именно данные страницы, а не общая оболочка:
+
+```python
+contract = ResponseContract.html(
+    canaries=("data-meta-table",),
+    min_body_bytes=500,
+)
+```
+
+Контракты fail-closed: JSON без обязательного path, HTML/Text без canary,
+несовпавший формат и усечённый ответ не могут получить `OK`. Клиентская
+оболочка остаётся `CSR_REQUIRED`; это разрешает бесплатный браузерный маршрут,
+но не платного провайдера.
+
+`transport_validated` означает только «получен полный ответ нужного типа с
+заданным доказательством». Число строк, обязательные поля, свежесть патча,
+регрессия и атомарная публикация проверяются прикладным парсером отдельно. Это
+не позволяет резервным или старым данным выглядеть как свежий успех.
+
+На этой границе проверены формы ответов, характерные для наших источников:
+
+| Семейство источника | Контракт ParsesUnix | Что остаётся приложению |
+|---|---|---|
+| HSReplay / Firestone API | JSON + обязательные schema paths | число сущностей, patch, completeness |
+| HSGuru SSR | HTML + source-specific canary | deck-коды и семантика строк |
+| CSR-страницы | HTML + canary → `CSR_REQUIRED` | discovery JSON API или L2 rendering |
+
+Детальная последовательность внедрения в Hearthstone pipeline описана в
+[плане интеграции](docs/HEARTHSTONE_INTEGRATION_PLAN.md).
+
+---
+
 ## Первый прогон
 
 `run.json`:
