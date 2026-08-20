@@ -26,9 +26,7 @@ cases:
     fixture: article-layout-variant
     expect_verdict: OK
     expect_fields: [title]
-    notes: >-
-      The markup was rewritten and the CSS class renamed. The title survives
-      because JSON-LD carries it, which is the entire reason for a second source.
+    notes: The markup was rewritten and the CSS class renamed; JSON-LD keeps the title.
 
   - id: article-404
     url_class: article
@@ -55,10 +53,7 @@ cases:
     kind: empty_result
     fixture: rankings-empty
     expect_verdict: PARSE_FAIL
-    notes: >-
-      An empty collection must not be reported as a successful extraction of
-      nothing. The declared JSON path is absent, so the page fails validation
-      rather than publishing zero rows over yesterday's data.
+    notes: An empty collection must fail validation instead of replacing yesterday's rows.
 
 not_applicable:
   - url_class: article
@@ -66,6 +61,4 @@ not_applicable:
     reason: an article is a single page; there is nothing to paginate
   - url_class: rankings
     kind: pagination
-    reason: >-
-      the rankings endpoint returns a whole season in one response. The listing
-      class in a real profile would carry the pagination case.
+    reason: the rankings endpoint returns a whole season in one response

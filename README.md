@@ -40,7 +40,7 @@
 - **Atomic promote + LKG** — полупрогона не существует; старые данные помечены как старые.
 - **URL accounting** — сводимый до нуля реестр.
 - **Regression detection** — «сайт изменился» видно до того, как испортятся данные.
-- **Strict typing + CI** — `mypy --strict`, `ruff`, 344 теста.
+- **Strict typing + CI** — `mypy --strict`, `ruff`, более 1100 тестов.
 
 ---
 
