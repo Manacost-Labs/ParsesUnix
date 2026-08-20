@@ -26,7 +26,7 @@ from web_scraper.embedded import (
     validate_response,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.10.0"
 
 __all__ = [
     "FREE_ESCALATION_VERDICTS",
