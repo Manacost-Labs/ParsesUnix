@@ -201,7 +201,7 @@ ws-budget --db state/budget.sqlite3 reconcile \
 gateway = FetchGateway(
     profile,
     paid_escalator=PaidEscalator(
-        ScrapeDoProvider(),          # токен только из SCRAPE_DO_TOKEN
+        ScrapeDoProvider(),  # токен только из SCRAPE_DO_TOKEN
         budget=BudgetLedger(path, daily_credit_limit="500"),
         router=PaidProviderRouter(stats=route_stats),
     ),

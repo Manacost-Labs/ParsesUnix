@@ -8,6 +8,7 @@
 
 ```python
 from web_scraper.finops import FreeCanary, CanaryUrl
+
 outcome = FreeCanary().run(candidates, fetch=gateway.fetch_url)
 ```
 

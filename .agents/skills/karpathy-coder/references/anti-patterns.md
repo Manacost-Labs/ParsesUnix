@@ -50,14 +50,19 @@ class DiscountStrategy(ABC):
     @abstractmethod
     def calculate(self, amount: float) -> float: ...
 
+
 class PercentageDiscount(DiscountStrategy): ...
+
+
 class FixedDiscount(DiscountStrategy): ...
+
 
 @dataclass
 class DiscountConfig:
     strategy: DiscountStrategy
     min_purchase: float = 0.0
-    max_discount: float = float('inf')
+    max_discount: float = float("inf")
+
 
 class DiscountCalculator:
     def __init__(self, config: DiscountConfig): ...
@@ -81,8 +86,7 @@ Add the Strategy pattern when you actually have multiple discount types. Not bef
 **Good:**
 ```python
 def save_preferences(db, user_id: int, preferences: dict):
-    db.execute("UPDATE users SET preferences = ? WHERE id = ?",
-               (json.dumps(preferences), user_id))
+    db.execute("UPDATE users SET preferences = ? WHERE id = ?", (json.dumps(preferences), user_id))
 ```
 
 ## Principle #3 — Surgical Changes
