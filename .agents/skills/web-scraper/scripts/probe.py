@@ -16,7 +16,7 @@ from web_scraper.probe import (  # noqa: E402,F401
     probe,
     validate_public_url,
 )
-from web_scraper.probe.cli import main  # noqa: E402,F401
+from web_scraper.probe.cli import main  # noqa: E402
 
 if __name__ == "__main__":
     raise SystemExit(main())

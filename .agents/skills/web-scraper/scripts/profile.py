@@ -16,7 +16,7 @@ from web_scraper.profiles import (  # noqa: E402,F401
     merge_api_candidate,
     parse_profile,
 )
-from web_scraper.profiles.cli import main  # noqa: E402,F401
+from web_scraper.profiles.cli import main  # noqa: E402
 
 if __name__ == "__main__":
     raise SystemExit(main())
