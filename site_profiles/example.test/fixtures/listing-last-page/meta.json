@@ -1,0 +1,8 @@
+{
+  "url": "https://example.test/api/listing?page=2",
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "note": "Recorded fixture for the example package. Synthetic: no real site was fetched."
+}

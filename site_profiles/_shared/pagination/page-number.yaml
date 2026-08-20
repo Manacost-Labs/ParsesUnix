@@ -1,0 +1,10 @@
+# Page-number pagination: ?page=1, 2, 3...
+#
+# The trap is the empty tail: many sites answer 200 with an empty list for any
+# page beyond the last, so a crawler that stops on an error never stops.
+pagination:
+  strategy: page_number
+  parameter: page
+  max_depth: 200
+  completeness: expected_count
+  stop_on_empty_page: true

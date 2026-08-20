@@ -1,0 +1,12 @@
+# Next.js ships the page's data as JSON inside __NEXT_DATA__.
+#
+# Worth reaching for first on any Next.js site: it is the same data the page
+# renders from, so it cannot disagree with what the user sees, and it survives
+# every change to the markup around it.
+extractors:
+  - kind: app_state
+    source: __NEXT_DATA__
+    fields:
+      # props.pageProps is where Next puts the page's own data. The rest of the
+      # path is the site's, not the framework's.
+      title: props.pageProps.title

@@ -1,0 +1,8 @@
+{
+  "url": "https://example.test/articles/3",
+  "status": 200,
+  "headers": {
+    "Content-Type": "text/html"
+  },
+  "note": "Recorded fixture for the example package. Synthetic: no real site was fetched."
+}

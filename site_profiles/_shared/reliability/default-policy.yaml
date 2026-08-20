@@ -1,0 +1,23 @@
+# The reliability defaults a profile inherits unless it says otherwise.
+#
+# Every figure here is a decision somebody should be able to argue with, which
+# is why they are in a file with their reasons rather than in the middle of a
+# function.
+freshness:
+  # How old data may be before it is refetched, and how often the whole set is
+  # re-read regardless. The second number exists because incremental updates
+  # accumulate drift that no single fetch would ever notice.
+  max_age_hours: 24
+  full_review_days: 7
+
+promote:
+  # A run that produced less than this is not published over what is already
+  # there. A partial dataset that replaces a complete one is worse than a stale
+  # one, because staleness is visible and truncation is not.
+  min_completeness: 0.95
+  max_null_rate_growth: 0.05
+
+limits:
+  concurrency_per_domain: 2
+  paid_attempts_per_url: 0
+  daily_paid_credits: 0

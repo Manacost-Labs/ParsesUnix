@@ -1,0 +1,18 @@
+# Which site profiles exist, and which of them may be trusted.
+# Written by `ws-profile`. Hand edits are fine; secrets are refused.
+profile_schema_version: 1
+
+sites:
+  example.test:
+    path: example.test/profile.yaml
+    status: CERTIFIED
+    profile_version: 1
+    last_verified: "2026-08-20T06:20:00Z"
+    notes: "worked example; synthetic fixtures, no real site"
+    last_known_good:
+      profile_version: 1
+      profile_hash: sha256:136aa78e71939b28
+      certified_at: "2026-08-20T06:20:00Z"
+      evidence_hash: sha256:8fd0b2d7fe8ba678
+      verdict: CERTIFIED_WITH_WARNINGS
+      warnings: 2

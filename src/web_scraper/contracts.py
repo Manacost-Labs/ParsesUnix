@@ -157,6 +157,32 @@ class Route:
         )
 
 
+class FieldImportance(StrEnum):
+    """How much a missing field matters. Three answers, not a number.
+
+    A percentage of fields extracted is the metric everyone reaches for and it
+    is useless: losing a description and losing the price are both "one field",
+    and only one of them makes the dataset wrong. The severity has to be
+    declared per field, by whoever knows what the data is for.
+
+    ``CRITICAL``
+        The record is not a record without it. Missing means FAIL.
+    ``IMPORTANT``
+        The record is usable but poorer. Missing means a warning, and enough of
+        them means the profile is degrading.
+    ``OPTIONAL``
+        Nice to have. Missing is information, not a problem.
+    """
+
+    CRITICAL = "critical"
+    IMPORTANT = "important"
+    OPTIONAL = "optional"
+
+    @property
+    def blocks_certification(self) -> bool:
+        return self is FieldImportance.CRITICAL
+
+
 @dataclass(frozen=True)
 class ContentRules:
     """Validation rules applied to a response body during triage."""

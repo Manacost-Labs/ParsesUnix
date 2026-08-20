@@ -1,0 +1,13 @@
+# Cursor pagination: the API hands back a token for the next page.
+#
+# The completeness rule matters more than the mechanics. A cursor loop that
+# stops early looks exactly like one that finished, so the profile has to say
+# how it knows it saw everything — an expected count, or a last page that
+# explicitly carries no cursor.
+pagination:
+  strategy: cursor
+  cursor_field: next_cursor
+  max_depth: 200
+  # Without this, "the crawl ended" and "the crawl completed" are the same
+  # observation. They are not the same fact.
+  completeness: explicit_end_of_list

@@ -15,9 +15,13 @@ from pathlib import Path
 from typing import Any, TypeGuard
 from urllib.parse import urlsplit
 
-from web_scraper.contracts import ContentRules, Level, Route, RouteType
+from web_scraper.contracts import ContentRules, FieldImportance, Level, Route, RouteType
 
-EXTRACTOR_KINDS = ("json_ld", "app_state", "meta", "css", "xpath", "heuristic")
+#: ``json`` reads a JSON response through the bounded path subset without ever
+#: building a DOM. It was supported by the extraction chain and rejected by this
+#: validator, so a profile for a JSON API could not declare the one extractor
+#: written for it.
+EXTRACTOR_KINDS = ("json", "json_ld", "app_state", "meta", "css", "xpath", "heuristic")
 APP_STATE_SOURCES = ("next_data", "initial_state", "nuxt", "apollo")
 
 SECRET_KEY_NAMES = frozenset(
@@ -111,6 +115,35 @@ def scan_for_secrets(value: Any, path: str, ctx: _Ctx) -> None:
             if pattern.search(value):
                 ctx.err(path, "value matches a secret/token pattern and is forbidden in profiles")
                 break
+        else:
+            _scan_url_query(value, path, ctx)
+
+
+def _scan_url_query(value: str, path: str, ctx: _Ctx) -> None:
+    """A credential hiding in a route URL's query string.
+
+    The likeliest way a key reaches a committed profile, and the one the
+    key-name scan above cannot see: ``api_key`` is not a mapping key here, it is
+    six characters in the middle of a string. Discovery already redacts these
+    parameters before writing a candidate down; a hand-written route deserves
+    the same refusal.
+    """
+
+    if "://" not in value or "?" not in value:
+        return
+    from urllib.parse import parse_qsl, urlsplit
+
+    from web_scraper.storage.redaction import SENSITIVE_QUERY_KEYS
+
+    query = urlsplit(value).query
+    for key, _ in parse_qsl(query, keep_blank_values=True):
+        if key.lower().replace("-", "_") in SENSITIVE_QUERY_KEYS:
+            ctx.err(
+                path,
+                f"the URL carries a credential in its query string ({key}); "
+                "profiles are committed and printed",
+            )
+            return
 
 
 def _check_unknown(
@@ -229,7 +262,7 @@ def _parse_extractor(raw: Any, path: str, ctx: _Ctx) -> dict[str, Any] | None:
         source = raw.get("source")
         if source is not None and source not in APP_STATE_SOURCES:
             ctx.err(f"{path}.source", f"unknown app-state source {source!r}")
-    elif kind in {"css", "xpath", "meta"}:
+    elif kind in {"css", "xpath", "meta", "json"}:
         _check_unknown(raw, {"kind", "fields"}, path, ctx)
         fields = raw.get("fields")
         if not isinstance(fields, Mapping) or not fields:
@@ -237,6 +270,16 @@ def _parse_extractor(raw: Any, path: str, ctx: _Ctx) -> dict[str, Any] | None:
             return None
         if not all(isinstance(v, str) and v for v in fields.values()):
             ctx.err(f"{path}.fields", "every field selector must be a non-empty string")
+        if kind == "json":
+            # A malformed path is a profile bug and should surface here rather
+            # than as a column of nulls in the output.
+            from web_scraper.extract.json_path import JsonPathError, validate_path
+
+            for name, expression in fields.items():
+                try:
+                    validate_path(str(expression))
+                except JsonPathError as exc:
+                    ctx.err(f"{path}.fields.{name}", str(exc))
     else:  # heuristic
         _check_unknown(raw, {"kind"}, path, ctx)
     return {str(key): value for key, value in raw.items()}
@@ -262,6 +305,10 @@ class UrlClass:
     stop_signatures: tuple[str, ...]
     required_fields: tuple[str, ...]
     required_json_paths: tuple[str, ...]
+    #: field -> how much its absence matters. Every name in ``required_fields``
+    #: appears here as CRITICAL, so the older spelling keeps working unchanged
+    #: and a profile that never heard of importance behaves exactly as before.
+    field_importance: Mapping[str, FieldImportance]
     primary_route: Route
     alternative_routes: tuple[Route, ...]
     extractors: tuple[Mapping[str, Any], ...]
@@ -293,6 +340,30 @@ class UrlClass:
     def routes(self) -> tuple[Route, ...]:
         return (self.primary_route, *self.alternative_routes)
 
+    @property
+    def declares_pagination(self) -> bool:
+        """Does this class actually paginate?
+
+        The section is always present with defaults, so its existence proves
+        nothing — asking ``bool(pagination)`` returns True for every class ever
+        written. What proves pagination is a declared way to know the crawl saw
+        everything, because "the crawl ended" and "the crawl completed" are the
+        same observation and different facts.
+        """
+
+        return bool(
+            self.pagination.get("expected_count_selector") or self.pagination.get("strategy")
+        )
+
+    def fields_of(self, importance: FieldImportance) -> tuple[str, ...]:
+        return tuple(
+            sorted(name for name, level in self.field_importance.items() if level is importance)
+        )
+
+    @property
+    def critical_fields(self) -> tuple[str, ...]:
+        return self.fields_of(FieldImportance.CRITICAL)
+
 
 @dataclass(frozen=True)
 class SiteProfile:
@@ -301,6 +372,62 @@ class SiteProfile:
 
     def class_for_url(self, url: str) -> UrlClass | None:
         return next((cls for cls in self.url_classes.values() if cls.matches(url)), None)
+
+
+def _parse_field_importance(
+    raw: Any, required_fields: tuple[str, ...], path: str, ctx: _Ctx
+) -> dict[str, FieldImportance]:
+    """Read the importance map, with ``required_fields`` folded in as critical.
+
+    The older spelling is not deprecated and not translated away: a profile that
+    lists ``required_fields`` and nothing else gets exactly the behaviour it had
+    before, now with a name for it. Declaring the same field twice with two
+    different severities is an error rather than a precedence rule — a silent
+    winner there would decide whether a missing field fails a run.
+    """
+
+    out: dict[str, FieldImportance] = dict.fromkeys(required_fields, FieldImportance.CRITICAL)
+    if raw is None:
+        return out
+    if not isinstance(raw, Mapping):
+        ctx.err(path, "must be a mapping of field name to {importance: ...}")
+        return out
+
+    for name, spec in raw.items():
+        key = str(name)
+        level: str | None = None
+        if isinstance(spec, str):
+            level = spec
+        elif isinstance(spec, Mapping):
+            _check_unknown(spec, {"importance"}, f"{path}.{key}", ctx)
+            value = spec.get("importance")
+            level = value if isinstance(value, str) else None
+            if value is not None and not isinstance(value, str):
+                ctx.err(f"{path}.{key}.importance", "must be a string")
+        else:
+            ctx.err(f"{path}.{key}", "must be a string or {importance: ...}")
+            continue
+
+        if level is None:
+            ctx.err(f"{path}.{key}", "needs an importance")
+            continue
+        try:
+            parsed = FieldImportance(level.lower())
+        except ValueError:
+            allowed = ", ".join(i.value for i in FieldImportance)
+            ctx.err(f"{path}.{key}.importance", f"must be one of: {allowed}")
+            continue
+
+        existing = out.get(key)
+        if existing is not None and existing is not parsed:
+            ctx.err(
+                f"{path}.{key}",
+                f"is {existing.value} in required_fields and {parsed.value} here; "
+                "one field cannot have two severities",
+            )
+            continue
+        out[key] = parsed
+    return out
 
 
 def _parse_url_class(name: str, raw: Any, ctx: _Ctx, *, site: str = "") -> UrlClass | None:
@@ -351,6 +478,7 @@ def _parse_url_class(name: str, raw: Any, ctx: _Ctx, *, site: str = "") -> UrlCl
     stop_signatures: tuple[str, ...] = ()
     required_fields: tuple[str, ...] = ()
     required_json_paths: tuple[str, ...] = ()
+    field_importance: dict[str, FieldImportance] = {}
     if not isinstance(validation, Mapping):
         ctx.err(f"{path}.validation", "is required (canaries, required fields, size limits)")
     else:
@@ -363,6 +491,7 @@ def _parse_url_class(name: str, raw: Any, ctx: _Ctx, *, site: str = "") -> UrlCl
                 "stop_signatures",
                 "required_fields",
                 "required_json_paths",
+                "fields",
             },
             f"{path}.validation",
             ctx,
@@ -383,6 +512,9 @@ def _parse_url_class(name: str, raw: Any, ctx: _Ctx, *, site: str = "") -> UrlCl
         )
         required_json_paths = _string_list(
             validation.get("required_json_paths"), f"{path}.validation.required_json_paths", ctx
+        )
+        field_importance = _parse_field_importance(
+            validation.get("fields"), required_fields, f"{path}.validation.fields", ctx
         )
         # required_fields is enforced by the extraction layer, not by triage, so
         # it does NOT count as a triage-checkable content proof. Without a canary
@@ -497,6 +629,7 @@ def _parse_url_class(name: str, raw: Any, ctx: _Ctx, *, site: str = "") -> UrlCl
         stop_signatures=stop_signatures,
         required_fields=required_fields,
         required_json_paths=required_json_paths,
+        field_importance=field_importance,
         primary_route=primary_route,
         alternative_routes=tuple(alternative_routes),
         extractors=tuple(extractors),
@@ -516,7 +649,23 @@ def parse_profile(data: Any) -> SiteProfile:
         raise ProfileError(["profile root must be a mapping"])
 
     scan_for_secrets(data, "", ctx)
-    _check_unknown(data, {"site", "authorization", "url_classes"}, "", ctx)
+    _check_unknown(
+        data,
+        {
+            "site",
+            "authorization",
+            "url_classes",
+            # Package identity. Carried in the profile itself so a file that has
+            # been copied out of its directory still says what it is.
+            "profile_schema_version",
+            "profile_version",
+            "status",
+            "created_at",
+            "last_verified_at",
+        },
+        "",
+        ctx,
+    )
 
     site = data.get("site")
     if not isinstance(site, str) or not site.strip():

@@ -1,0 +1,57 @@
+# Template for a Site Profile. Every TODO is a decision that must not be guessed.
+#
+# A guessed selector is worse than an empty one: an empty one gets filled in,
+# and a guessed one gets trusted.
+profile_schema_version: 1
+profile_version: 1
+site: TODO.example
+status: DRAFT
+
+authorization:
+  public_data_only: true
+
+url_classes:
+  TODO_class_name:
+    # What this class IS, not the path that serves it today.
+    match: '^https://TODO\.example/TODO'
+    expected_content_type: html   # or json
+
+    validation:
+      min_body_bytes: 500
+      # A canary proves the page is THIS page. Not a phrase from the footer.
+      canary: "TODO"
+      # required_json_paths: ["items[*].id"]   # for JSON routes
+      fields:
+        TODO_field:
+          # critical  -> missing means the record is not a record
+          # important -> missing means the record is poorer
+          # optional  -> missing is information
+          importance: critical
+
+    routes:
+      # Cheapest sturdy route first. A validated API beats markup that shows
+      # the same data; markup beats a browser; a browser beats paying.
+      primary:
+        type: direct_http    # json_api | direct_http | dynamic_render
+        level: L1            # L0 | L1 | L2
+      alternatives: []
+
+    extractors:
+      # Structured sources first. The heuristic is a last resort and may never
+      # be the only source for a critical field.
+      - kind: json_ld
+      - kind: css
+        fields:
+          TODO_field: "TODO-selector::text"
+
+    # A second source for critical fields, where the page offers one.
+    quorum_fields:
+      - TODO_field
+
+    freshness:
+      max_age_hours: 24
+      full_review_days: 7
+
+    promote:
+      min_completeness: 0.95
+      max_null_rate_growth: 0.05

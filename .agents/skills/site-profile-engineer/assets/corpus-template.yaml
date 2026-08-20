@@ -1,0 +1,43 @@
+# Acceptance corpus template.
+#
+# At least one NEGATIVE case per URL class, or certification refuses. A suite
+# where everything is expected to succeed cannot tell a working profile from one
+# that says yes to everything.
+domain: TODO.example
+
+cases:
+  - id: TODO-normal
+    url_class: TODO_class_name
+    kind: normal
+    fixture: TODO-normal
+    expect_verdict: OK
+    expect_fields: [TODO_field]
+
+  - id: TODO-second-entity
+    url_class: TODO_class_name
+    kind: different_entity
+    fixture: TODO-second-entity
+    expect_verdict: OK
+    expect_fields: [TODO_field]
+
+  - id: TODO-404
+    url_class: TODO_class_name
+    kind: not_found
+    fixture: TODO-404
+    expect_verdict: DEAD_URL
+
+  - id: TODO-empty
+    url_class: TODO_class_name
+    kind: empty_result
+    fixture: TODO-empty
+    expect_verdict: PARSE_FAIL
+    notes: >-
+      An empty collection must not be reported as a successful extraction of
+      nothing, or zero rows get published over yesterday's data.
+
+# Kinds that do not apply here, WITH the reason. Omitting them instead leaves
+# "there is nothing to paginate" and "nobody tested pagination" looking the same.
+not_applicable:
+  - url_class: TODO_class_name
+    kind: pagination
+    reason: TODO

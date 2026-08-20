@@ -36,7 +36,7 @@ dev = ["mypy>=1.8", "ruff>=0.5"]
 [project.scripts]
 ws-probe = "web_scraper.probe.cli:main"
 ws-triage = "web_scraper.triage:main"
-ws-profile = "web_scraper.profiles.cli:main"
+ws-profile = "web_scraper.profile_engineering.cli:main"
 ws-budget = "web_scraper.budget:main"
 ws-run = "web_scraper.run.cli:main"
 ws-regress = "web_scraper.regression.cli:main"

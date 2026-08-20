@@ -1,0 +1,8 @@
+{
+  "url": "https://example.test/api/rankings?season=1",
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "note": "Recorded fixture for the example package. Synthetic: no real site was fetched."
+}

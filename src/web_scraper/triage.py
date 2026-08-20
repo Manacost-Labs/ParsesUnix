@@ -141,8 +141,11 @@ def _find_access_denied_signature(body: bytes) -> str | None:
 def _json_path_exists(value: Any, path: str) -> bool:
     """Does the profile's path resolve to something in this document?
 
-    Traversal is delegated to :func:`~web_scraper.extract.json_path.walk`, which
-    is the subset Site Profiles are written against. An earlier version walked
+    Traversal is delegated to :func:`~web_scraper.extract.json_path.walk_many`,
+    which is the subset Site Profiles are written against — wildcards included.
+    Using the narrower ``walk`` here meant a profile could declare the
+    documented ``[*]`` syntax, extract from it correctly, and still be told by
+    triage that the path was missing. An earlier version walked
     only dictionaries, so a top-level JSON *array* — the commonest shape a
     listing endpoint has — could not be validated at all: every required path
     reported missing and triage returned PARSE_FAIL for a perfectly good
@@ -154,12 +157,20 @@ def _json_path_exists(value: Any, path: str) -> bool:
     ending the run; profile validation is where that belongs.
     """
 
-    from web_scraper.extract.json_path import JsonPathError, walk
+    from web_scraper.extract.json_path import JsonPathError, walk_many
 
     try:
-        return walk(value, path) is not None
+        resolved = walk_many(value, path)
     except JsonPathError:
         return False
+    if resolved is None:
+        return False
+    if isinstance(resolved, list):
+        # An empty list is the shape an endpoint returns when it has nothing to
+        # say. Treating that as "the path exists" would let a profile publish
+        # zero rows over yesterday's data and call it a successful fetch.
+        return any(item is not None for item in resolved)
+    return True
 
 
 def _body_matches(payload: bytes, expected: str) -> bool:

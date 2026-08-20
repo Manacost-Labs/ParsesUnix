@@ -1,0 +1,89 @@
+# A worked example, and the package the end-to-end tests run against.
+#
+# The site is synthetic: every fixture under `fixtures/` was generated, not
+# fetched. That is deliberate — an example package that depends on a real site
+# stops working the day that site changes, and then it teaches the wrong thing.
+#
+# What it demonstrates is the shape a real package should have:
+#   * a JSON route preferred over markup where the site offers one;
+#   * critical fields with a SECOND source, so a redesign is survivable;
+#   * a negative case per class, so the profile can be shown to say no.
+profile_schema_version: 1
+profile_version: 1
+site: example.test
+
+authorization:
+  public_data_only: true
+
+url_classes:
+  article:
+    match: '^https://example\.test/articles/'
+    expected_content_type: html
+    validation:
+      min_body_bytes: 400
+      canary: "<article"
+      fields:
+        title:
+          importance: critical
+        author:
+          importance: important
+        description:
+          importance: optional
+    routes:
+      primary:
+        type: direct_http
+        level: L1
+    extractors:
+      # JSON-LD first: it is a structure the site publishes on purpose, and it
+      # survives the markup being rewritten. The CSS selector below is the
+      # second opinion, not the first.
+      - kind: json_ld
+      - kind: css
+        fields:
+          title: ".article-title::text"
+          author: ".byline::text"
+          description: ".summary::text"
+    quorum_fields:
+      - title
+    freshness:
+      max_age_hours: 24
+      full_review_days: 7
+    promote:
+      min_completeness: 0.95
+    retry:
+      max_attempts: 2
+      backoff_seconds: 1
+
+  rankings:
+    match: '^https://example\.test/api/rankings'
+    expected_content_type: json
+    validation:
+      min_body_bytes: 2
+      required_json_paths:
+        - "[*].spec"
+      fields:
+        spec:
+          importance: critical
+        score:
+          importance: critical
+        sample_size:
+          importance: important
+    routes:
+      primary:
+        type: json_api
+        level: L0
+        url: https://example.test/api/rankings
+    extractors:
+      # Wildcards, not indexes. `0.spec` would mean "whatever happens to be
+      # first", which is not a field — and the fragility check says so, which
+      # is how this profile failed certification the first time.
+      - kind: json
+        fields:
+          spec: "[*].spec"
+          score: "[*].score"
+          sample_size: "[*].sample_size"
+    freshness:
+      max_age_hours: 1
+      full_review_days: 1
+    promote:
+      min_completeness: 0.99

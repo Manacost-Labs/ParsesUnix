@@ -1,0 +1,9 @@
+# A JSON endpoint read through the bounded path subset. No DOM is built.
+#
+# Prefer `[*].field` over `0.field`. An index means "whatever happens to be
+# first", which is not a field — and the fragility check will say so.
+extractors:
+  - kind: json
+    fields:
+      id: "[*].id"
+      name: "[*].name"

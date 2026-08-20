@@ -1,0 +1,71 @@
+# What this profile has to survive before anyone trusts it.
+#
+# Note what is here beyond the happy path: a second entity, a redesigned layout,
+# a 404 and an empty collection. A suite where every case is expected to succeed
+# cannot tell a working profile from one that accepts anything, which is why
+# certification refuses to proceed without a negative case.
+domain: example.test
+cases:
+  - id: article-normal
+    url_class: article
+    kind: normal
+    fixture: article-normal
+    expect_verdict: OK
+    expect_fields: [title, author]
+
+  - id: article-second-entity
+    url_class: article
+    kind: different_entity
+    fixture: article-second-entity
+    expect_verdict: OK
+    expect_fields: [title, author]
+
+  - id: article-layout-variant
+    url_class: article
+    kind: layout_variant
+    fixture: article-layout-variant
+    expect_verdict: OK
+    expect_fields: [title]
+    notes: >-
+      The markup was rewritten and the CSS class renamed. The title survives
+      because JSON-LD carries it, which is the entire reason for a second source.
+
+  - id: article-404
+    url_class: article
+    kind: not_found
+    fixture: article-404
+    expect_verdict: DEAD_URL
+
+  - id: rankings-normal
+    url_class: rankings
+    kind: normal
+    fixture: rankings-normal
+    expect_verdict: OK
+    expect_fields: [spec, score, sample_size]
+
+  - id: rankings-second-season
+    url_class: rankings
+    kind: different_entity
+    fixture: rankings-second-season
+    expect_verdict: OK
+    expect_fields: [spec, score]
+
+  - id: rankings-empty
+    url_class: rankings
+    kind: empty_result
+    fixture: rankings-empty
+    expect_verdict: PARSE_FAIL
+    notes: >-
+      An empty collection must not be reported as a successful extraction of
+      nothing. The declared JSON path is absent, so the page fails validation
+      rather than publishing zero rows over yesterday's data.
+
+not_applicable:
+  - url_class: article
+    kind: pagination
+    reason: an article is a single page; there is nothing to paginate
+  - url_class: rankings
+    kind: pagination
+    reason: >-
+      the rankings endpoint returns a whole season in one response. The listing
+      class in a real profile would carry the pagination case.

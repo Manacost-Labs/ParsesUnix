@@ -196,6 +196,12 @@ def _one_extractor(
         if document is not None:
             for f, path in mapping.items():
                 raw = walk_many(document, str(path))
+                # A wildcard over rows that no longer carry the key resolves to
+                # [None, None, None] — truthy, and completely empty. Recording
+                # that as a found value is how a field "keeps working" through
+                # the API change that removed it.
+                if isinstance(raw, list):
+                    raw = [item for item in raw if item is not None]
                 if raw is not None and raw != []:
                     out[f] = normalize_value(
                         raw, kind=field_kinds.get(f, "text"), base_url=base_url

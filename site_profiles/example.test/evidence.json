@@ -1,0 +1,68 @@
+{
+  "distinct_entities": 7,
+  "generated_at": "2026-08-20T06:10:21Z",
+  "mutations": {
+    "not_noticed": [
+      "change_field_type:score",
+      "change_field_type:spec"
+    ],
+    "passed": 14,
+    "run": 16
+  },
+  "note": "Identifiers are hashed and no body, header or value is stored. An evidence file is committed and shared; it records what was measured, not what was fetched.",
+  "page_hashes": [
+    "sha256:064d05941f647d1d",
+    "sha256:1ffe4c5ce6d7df03",
+    "sha256:238c90ec7868845e",
+    "sha256:295fd78268fb14f4",
+    "sha256:591ad27e29c5828c",
+    "sha256:61701dbb1c6de832",
+    "sha256:c70aaf70076475da"
+  ],
+  "profile_schema_version": 1,
+  "profile_version": 1,
+  "state": "CERTIFIED",
+  "tested_pages": 7,
+  "url_classes": {
+    "article": {
+      "cases": 4,
+      "critical_fields": {
+        "title": {
+          "agreement": {
+            "conflicts": 0,
+            "matched": 3
+          },
+          "sources": [
+            "css",
+            "json_ld"
+          ]
+        }
+      },
+      "negative_cases": 2
+    },
+    "rankings": {
+      "cases": 3,
+      "critical_fields": {
+        "score": {
+          "agreement": {
+            "conflicts": 0,
+            "matched": 2
+          },
+          "sources": [
+            "json"
+          ]
+        },
+        "spec": {
+          "agreement": {
+            "conflicts": 0,
+            "matched": 2
+          },
+          "sources": [
+            "json"
+          ]
+        }
+      },
+      "negative_cases": 1
+    }
+  }
+}

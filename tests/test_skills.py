@@ -19,7 +19,12 @@ AGENT_SKILLS = ROOT / ".agents" / "skills"
 CLAUDE_SKILLS = ROOT / ".claude" / "skills"
 
 #: Skills authored in this repository (the rest are vendored, see THIRD_PARTY.md).
-OWN_SKILLS = {"web-scraper", "scraper-regression", "scraper-debugger"}
+OWN_SKILLS = {
+    "web-scraper",
+    "scraper-regression",
+    "scraper-debugger",
+    "site-profile-engineer",
+}
 
 _LINK_RE = re.compile(
     r"\]\((?!https?:|#|mailto:)([A-Za-z0-9_./-]+\.(?:md|py|sh|ts|yaml|yml|json))\)"

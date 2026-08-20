@@ -1,0 +1,23 @@
+{
+  "profile_version": 1,
+  "profile_schema_version": 1,
+  "generated_at": "TODO",
+  "state": "DRAFT",
+  "tested_pages": 0,
+  "distinct_entities": 0,
+  "url_classes": {
+    "TODO_class_name": {
+      "cases": 0,
+      "negative_cases": 0,
+      "critical_fields": {
+        "TODO_field": {
+          "sources": ["json_ld", "css"],
+          "agreement": {"matched": 0, "conflicts": 0}
+        }
+      }
+    }
+  },
+  "mutations": {"run": 0, "passed": 0, "not_noticed": []},
+  "page_hashes": [],
+  "note": "Identifiers are hashed. No body, header, URL or value is stored: an evidence file is committed and shared."
+}
