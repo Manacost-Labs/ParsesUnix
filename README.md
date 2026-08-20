@@ -642,11 +642,11 @@ CLOSED → OPEN → (остывание) → HALF_OPEN → один пробны
 ## Качество кода
 
 ```bash
-ruff check src tests tools
-ruff format --check src tests tools
-mypy
-python -m unittest discover -s tests
+make check
 ```
+
+Команда использует `.venv`, если окружение создано, и запускает тот же набор
+Ruff, mypy и stdlib `unittest`, что используется в CI.
 
 Python 3.11–3.13. Рантайм — **только стандартная библиотека**; браузер, PyYAML и
 Scrapling остаются опциональными зависимостями. Тесты, требующие браузера,
