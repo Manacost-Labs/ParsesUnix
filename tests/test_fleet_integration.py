@@ -243,7 +243,7 @@ class FleetParity(unittest.TestCase):
 
         source = inspect.getsource(runner_module)
         self.assertIn("from web_scraper.run.estimate_cli import configured_providers", source)
-        self.assertIn("configured_providers()", source)
+        self.assertIn("configured_providers(self.config.allowed_providers)", source)
         self.assertTrue(callable(configured_providers))
 
     def test_every_shipped_adapter_is_reachable_from_that_one_function(self) -> None:
@@ -263,8 +263,26 @@ class FleetParity(unittest.TestCase):
             "ZYTE_API_KEY": "k",
         }
         with mock.patch.dict(os.environ, env, clear=False):
-            built = {p.name for p in configured_providers()}
+            built = {p.name for p in configured_providers([case.name for case in VENDORS])}
         self.assertEqual(built, {case.name for case in VENDORS})
+
+    def test_credentials_alone_never_enable_a_paid_provider(self) -> None:
+        import os
+        from unittest import mock
+
+        from web_scraper.run.estimate_cli import configured_providers
+
+        env = {
+            "SCRAPE_DO_TOKEN": "t",
+            "BRIGHTDATA_API_KEY": "k",
+            "BRIGHTDATA_ZONE": "z",
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(configured_providers(), [])
+            self.assertEqual(
+                [provider.name for provider in configured_providers(("scrape.do",))],
+                ["scrape.do"],
+            )
 
     def test_a_vendor_without_its_key_is_absent_rather_than_broken(self) -> None:
         import os
@@ -277,7 +295,7 @@ class FleetParity(unittest.TestCase):
 
 
 class PreflightReadiness(unittest.TestCase):
-    def _report(self, env: dict):  # type: ignore[no-untyped-def]
+    def _report(self, env: dict, *allowed: str):  # type: ignore[no-untyped-def]
         import os
         from unittest import mock
 
@@ -286,17 +304,22 @@ class PreflightReadiness(unittest.TestCase):
 
         with mock.patch.dict(os.environ, env, clear=True), tempfile.TemporaryDirectory() as tmp:
             return preflight(
-                RunConfig(profile_path=Path(tmp) / "p.json", state_dir=Path(tmp), seed_urls=())
+                RunConfig(
+                    profile_path=Path(tmp) / "p.json",
+                    state_dir=Path(tmp),
+                    seed_urls=(),
+                    allowed_providers=allowed,
+                )
             )
 
     def test_a_configured_vendor_is_reported_with_its_live_verification_date(self) -> None:
-        report = self._report({"SCRAPE_DO_TOKEN": "t"})
+        report = self._report({"SCRAPE_DO_TOKEN": "t"}, "scrape.do")
         line = next(c for c in report.checks if c.name == "provider_scrape.do")
         self.assertTrue(line.ok)
         self.assertIn("live verified", line.detail)
 
     def test_a_vendor_nobody_can_price_is_flagged_before_the_run_not_during(self) -> None:
-        report = self._report({"ZYTE_API_KEY": "k"})
+        report = self._report({"ZYTE_API_KEY": "k"}, "zyte")
         line = next(c for c in report.checks if c.name == "provider_zyte")
         self.assertFalse(line.ok)
         self.assertIn("unpriceable", line.detail)
@@ -308,7 +331,8 @@ class PreflightReadiness(unittest.TestCase):
                 "ZYTE_HTTP_MAX_USD": "0.002",
                 "ZYTE_BROWSER_MAX_USD": "0.005",
                 "ZYTE_CAPTURE_MAX_USD": "0.008",
-            }
+            },
+            "zyte",
         )
         line = next(c for c in report.checks if c.name == "provider_zyte")
         self.assertTrue(line.ok, line.detail)

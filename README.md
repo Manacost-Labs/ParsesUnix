@@ -162,7 +162,8 @@ ws-profile validate profiles/example.yaml
   "state_dir": "state",
   "seed_urls": ["https://example.com/articles/first"],
   "deadline_seconds": 14400,
-  "batch_size": 20
+  "batch_size": 20,
+  "allowed_providers": []
 }
 ```
 
@@ -172,6 +173,11 @@ ws-run run.json --report state/last-report.json
 
 В отчёте — покрытие, вердикты по каждому URL, здоровье маршрутов, свежесть
 данных и нулевой `unaccounted`.
+
+Платные провайдеры включаются только явным массивом `allowed_providers` в этом
+же файле. Одних переменных окружения с ключами недостаточно. Порядок массива
+задаёт разрешённый оператором порядок провайдеров; для бесплатного запуска он
+остаётся пустым.
 
 ---
 

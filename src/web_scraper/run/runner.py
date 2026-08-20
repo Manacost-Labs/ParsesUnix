@@ -228,7 +228,7 @@ class Runner:
         from web_scraper.providers.stats import ProviderStatsStore
         from web_scraper.run.estimate_cli import configured_providers
 
-        providers = configured_providers()
+        providers = configured_providers(self.config.allowed_providers)
         if not providers:
             return None
 

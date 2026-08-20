@@ -63,7 +63,7 @@ def _providers(names: Sequence[str], *, capture: bool = True) -> list[Provider]:
     from web_scraper.providers.zenrows import ZenRowsProvider
     from web_scraper.run.estimate_cli import configured_providers
 
-    fleet = configured_providers()
+    fleet = configured_providers(names)
     if capture:
         fleet = [ZenRowsProvider(capture_network=True) if p.name == "zenrows" else p for p in fleet]
     if not names:

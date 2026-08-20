@@ -10,7 +10,7 @@ instead of quoting a price for a vendor that would fail on every call.
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -34,20 +34,29 @@ from web_scraper.queue.store import QueueStore
 UNRESOLVED_VERDICTS = frozenset({Verdict.BLOCKED.value, Verdict.SOFT_BLOCK.value})
 
 
-def configured_providers() -> list[Provider]:
-    """Every vendor this machine could actually call, in cheapest-first order."""
+_PROVIDER_FACTORIES: dict[str, tuple[Callable[[], bool], Callable[[], Provider]]] = {
+    "scrape.do": (lambda: bool(os.environ.get("SCRAPE_DO_TOKEN")), ScrapeDoProvider),
+    "firecrawl": (lambda: bool(os.environ.get("FIRECRAWL_API_KEY")), FirecrawlProvider),
+    "brightdata": (
+        lambda: bool(os.environ.get("BRIGHTDATA_API_KEY") and os.environ.get("BRIGHTDATA_ZONE")),
+        BrightDataProvider,
+    ),
+    "zenrows": (lambda: bool(os.environ.get("ZENROWS_API_KEY")), ZenRowsProvider),
+    "zyte": (lambda: bool(os.environ.get("ZYTE_API_KEY")), ZyteProvider),
+}
 
+
+def configured_providers(allowed: Sequence[str] = ()) -> list[Provider]:
+    """Build only explicitly allowed vendors, preserving operator order."""
+
+    unknown = sorted(set(allowed) - set(_PROVIDER_FACTORIES))
+    if unknown:
+        raise ValueError(f"unknown paid providers: {', '.join(unknown)}")
     providers: list[Provider] = []
-    if os.environ.get("SCRAPE_DO_TOKEN"):
-        providers.append(ScrapeDoProvider())
-    if os.environ.get("FIRECRAWL_API_KEY"):
-        providers.append(FirecrawlProvider())
-    if os.environ.get("BRIGHTDATA_API_KEY") and os.environ.get("BRIGHTDATA_ZONE"):
-        providers.append(BrightDataProvider())
-    if os.environ.get("ZENROWS_API_KEY"):
-        providers.append(ZenRowsProvider())
-    if os.environ.get("ZYTE_API_KEY"):
-        providers.append(ZyteProvider())
+    for name in allowed:
+        configured, factory = _PROVIDER_FACTORIES[name]
+        if configured():
+            providers.append(factory())
     return providers
 
 
@@ -88,10 +97,11 @@ def build_estimate(
     daily_credit_limit: str | None,
     free_url_count: int = 0,
     providers: Sequence[Provider] | None = None,
+    allowed_providers: Sequence[str] = (),
 ) -> CostEstimate:
     """Price the work using the same router the run would use."""
 
-    fleet = list(providers) if providers is not None else configured_providers()
+    fleet = list(providers) if providers is not None else configured_providers(allowed_providers)
     router = MultiProviderRouter(
         providers=fleet,
         stats=ProviderStatsStore(state_dir / "provider_stats.sqlite3"),

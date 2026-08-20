@@ -24,15 +24,14 @@ class RunConfigTests(unittest.TestCase):
             "adaptive_routing",
             "browser_pool",
         ):
-            with self.subTest(key=key), self.assertRaisesRegex(
-                ValueError, f"{key} must be a JSON boolean"
+            with (
+                self.subTest(key=key),
+                self.assertRaisesRegex(ValueError, f"{key} must be a JSON boolean"),
             ):
                 RunConfig.from_dict({"profile": "profile.json", key: "false"})
 
     def test_false_keeps_private_network_access_disabled(self) -> None:
-        config = RunConfig.from_dict(
-            {"profile": "profile.json", "allow_private": False}
-        )
+        config = RunConfig.from_dict({"profile": "profile.json", "allow_private": False})
 
         self.assertFalse(config.allow_private)
 
@@ -52,9 +51,7 @@ class RunConfigTests(unittest.TestCase):
 
     def test_seed_urls_must_be_an_array_of_strings(self) -> None:
         with self.assertRaisesRegex(ValueError, "seed_urls must be an array"):
-            RunConfig.from_dict(
-                {"profile": "profile.json", "seed_urls": "https://example.com"}
-            )
+            RunConfig.from_dict({"profile": "profile.json", "seed_urls": "https://example.com"})
 
     def test_from_file_requires_a_json_object(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -63,6 +60,27 @@ class RunConfigTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "must be a JSON object"):
                 RunConfig.from_file(path)
+
+    def test_paid_providers_are_an_ordered_explicit_allowlist(self) -> None:
+        config = RunConfig.from_dict(
+            {
+                "profile": "profile.json",
+                "allowed_providers": ["scrape.do", "firecrawl"],
+            }
+        )
+
+        self.assertEqual(config.allowed_providers, ("scrape.do", "firecrawl"))
+
+    def test_unknown_or_duplicate_paid_providers_are_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unknown paid providers: mystery"):
+            RunConfig.from_dict({"profile": "profile.json", "allowed_providers": ["mystery"]})
+        with self.assertRaisesRegex(ValueError, "must not contain duplicates"):
+            RunConfig.from_dict(
+                {
+                    "profile": "profile.json",
+                    "allowed_providers": ["scrape.do", "scrape.do"],
+                }
+            )
 
 
 if __name__ == "__main__":

@@ -101,6 +101,7 @@ def _estimate(config: RunConfig, runner: Runner) -> int:
         state_dir=config.state_dir,
         daily_credit_limit=config.daily_credit_limit,
         free_url_count=sum(counts.values()),
+        allowed_providers=config.allowed_providers,
     )
     print(json.dumps({"ok": True, "estimate": estimate.to_dict()}, ensure_ascii=False, indent=2))
     # A run that cannot afford its own holds should not be started by a cron job

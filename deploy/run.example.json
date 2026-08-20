@@ -7,5 +7,6 @@
   "deadline_seconds": 14400,
   "batch_size": 20,
   "full_review": false,
-  "dead_zone_after_attempts": 3
+  "dead_zone_after_attempts": 3,
+  "allowed_providers": []
 }

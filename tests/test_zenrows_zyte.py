@@ -663,7 +663,7 @@ class FleetTests(unittest.TestCase):
         for name in ("ZENROWS_API_KEY", "ZYTE_API_KEY"):
             os.environ[name] = "test"
             self.addCleanup(lambda n=name: os.environ.pop(n, None))
-        names = {p.name for p in configured_providers()}
+        names = {p.name for p in configured_providers(("zenrows", "zyte"))}
         self.assertIn("zenrows", names)
         self.assertIn("zyte", names)
 
@@ -674,7 +674,7 @@ class FleetTests(unittest.TestCase):
 
         os.environ.pop("ZENROWS_API_KEY", None)
         os.environ.pop("ZYTE_API_KEY", None)
-        names = {p.name for p in configured_providers()}
+        names = {p.name for p in configured_providers(("zenrows", "zyte"))}
         self.assertNotIn("zenrows", names)
         self.assertNotIn("zyte", names)
 

@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
 _CONFIG_KEYS = frozenset(
     {
         "profile",
@@ -32,7 +31,16 @@ _CONFIG_KEYS = frozenset(
         "browser_pool",
         "max_browser_contexts",
         "daily_credit_limit",
+        "allowed_providers",
     }
+)
+
+PAID_PROVIDER_NAMES = (
+    "scrape.do",
+    "firecrawl",
+    "brightdata",
+    "zenrows",
+    "zyte",
 )
 
 
@@ -80,6 +88,16 @@ def _string_tuple(data: dict[str, Any], key: str) -> tuple[str, ...]:
     return tuple(value)
 
 
+def _provider_tuple(data: dict[str, Any]) -> tuple[str, ...]:
+    providers = _string_tuple(data, "allowed_providers")
+    unknown = sorted(set(providers) - set(PAID_PROVIDER_NAMES))
+    if unknown:
+        raise ValueError(f"unknown paid providers: {', '.join(unknown)}")
+    if len(providers) != len(set(providers)):
+        raise ValueError("allowed_providers must not contain duplicates")
+    return providers
+
+
 @dataclass(frozen=True)
 class RunConfig:
     profile_path: Path
@@ -115,6 +133,8 @@ class RunConfig:
     max_browser_contexts: int = 4
     #: Daily credit ceiling for paid providers. None disables paid work entirely.
     daily_credit_limit: str | None = None
+    #: Ordered, explicit allowlist. Credentials alone never enable a paid vendor.
+    allowed_providers: tuple[str, ...] = ()
 
     @property
     def effective_run_id(self) -> str:
@@ -183,18 +203,15 @@ class RunConfig:
             batch_size=_integer(data, "batch_size", 20, minimum=1),
             full_review=_boolean(data, "full_review", False),
             allow_private=_boolean(data, "allow_private", False),
-            dead_zone_after_attempts=_integer(
-                data, "dead_zone_after_attempts", 3, minimum=1
-            ),
+            dead_zone_after_attempts=_integer(data, "dead_zone_after_attempts", 3, minimum=1),
             sweep=_boolean(data, "sweep", False),
             adaptive_routing=_boolean(data, "adaptive_routing", True),
             browser_pool=_boolean(data, "browser_pool", True),
-            max_browser_contexts=_integer(
-                data, "max_browser_contexts", 4, minimum=1
-            ),
+            max_browser_contexts=_integer(data, "max_browser_contexts", 4, minimum=1),
             daily_credit_limit=(
                 _string(data, "daily_credit_limit")
                 if data.get("daily_credit_limit") is not None
                 else None
             ),
+            allowed_providers=_provider_tuple(data),
         )

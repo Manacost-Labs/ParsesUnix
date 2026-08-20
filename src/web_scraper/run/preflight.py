@@ -82,12 +82,12 @@ def preflight(config: RunConfig, *, pricing: PricingBook | None = None) -> Prefl
     ]
     checks.extend(_budget_checks(config))
     checks.extend(_pricing_checks(pricing or PricingBook()))
-    checks.extend(_provider_cost_safety())
-    checks.extend(_provider_readiness(pricing or PricingBook()))
+    checks.extend(_provider_cost_safety(config.allowed_providers))
+    checks.extend(_provider_readiness(pricing or PricingBook(), config.allowed_providers))
     return PreflightReport(tuple(checks))
 
 
-def _provider_readiness(pricing: PricingBook) -> list[Check]:
+def _provider_readiness(pricing: PricingBook, allowed_providers: tuple[str, ...]) -> list[Check]:
     """One line per configured vendor: can it be trusted with money tonight?
 
     Four facts, and the reason each is here rather than in a wiki:
@@ -106,7 +106,7 @@ def _provider_readiness(pricing: PricingBook) -> list[Check]:
 
     checks: list[Check] = []
     stale = {snapshot.provider for snapshot in pricing.stale_snapshots()}
-    for provider in configured_providers():
+    for provider in configured_providers(allowed_providers):
         name = provider.name
         verified = LIVE_VERIFIED_AT.get(name)
         priced = [
@@ -135,7 +135,7 @@ def _provider_readiness(pricing: PricingBook) -> list[Check]:
     return checks
 
 
-def _provider_cost_safety() -> list[Check]:
+def _provider_cost_safety(allowed_providers: tuple[str, ...]) -> list[Check]:
     """A funded provider whose cost cannot be bounded stops after one call.
 
     That is correct behaviour, and it is also a surprise worth having before the
@@ -150,6 +150,8 @@ def _provider_cost_safety() -> list[Check]:
         ("zyte", "ZYTE_API_KEY", ("ZYTE_HTTP_MAX_USD", "ZYTE_BROWSER_MAX_USD")),
     )
     for provider, key_env, bound_envs in needs_bound:
+        if provider not in allowed_providers:
+            continue
         if not os.environ.get(key_env):
             continue
         missing = [name for name in bound_envs if not os.environ.get(name)]
@@ -253,14 +255,17 @@ def _budget_checks(config: RunConfig) -> list[Check]:
     # so now than to report poor coverage afterwards.
     from web_scraper.run.estimate_cli import configured_providers
 
-    providers = configured_providers()
+    providers = configured_providers(config.allowed_providers)
     checks.append(
         Check(
             "provider_credentials",
             bool(providers),
             ", ".join(p.name for p in providers)
             if providers
-            else "a paid budget is configured but no provider credentials are set",
+            else (
+                "a paid budget is configured but no explicitly allowed provider "
+                "has usable credentials"
+            ),
         )
     )
     return checks

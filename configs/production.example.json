@@ -16,7 +16,8 @@
 
   "free_canary": true,
   "paid_canary": true,
+  "allowed_providers": ["scrape.do"],
 
-  "_budget": "Remove daily_credit_limit entirely for a free run. With it absent the paid phases are not even in the phase list.",
+  "_budget": "Remove daily_credit_limit and keep allowed_providers empty for a free run. Credentials alone never enable a paid provider.",
   "daily_credit_limit": "500"
 }
