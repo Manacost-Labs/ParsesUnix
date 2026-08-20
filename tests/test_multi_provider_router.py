@@ -137,7 +137,11 @@ class SelectionTests(RouterCase):
     def test_a_tripped_breaker_removes_a_candidate_at_any_price(self) -> None:
         from web_scraper.providers.base import ProviderErrorKind
 
-        breakers = ProviderBreakers(threshold=1)
+        # A frozen clock, because the default one made this test flaky: on a
+        # loaded machine the cooldown elapsed between tripping the breaker and
+        # asserting, the breaker went half-open, and the candidate reappeared.
+        # The test is about price never overriding health, not about timing.
+        breakers = ProviderBreakers(threshold=1, clock=lambda: 1000.0)
         breakers.record_error("cheap", "normal", ProviderErrorKind.TIMEOUT)
 
         cheap = FakeProvider("cheap", (strategy("normal", "1"),))
@@ -236,6 +240,57 @@ class ShadowProbeTests(RouterCase):
         decision = always.choose(domain=DOMAIN, url_class=URL_CLASS, verdict=Verdict.BLOCKED)
         self.assertTrue(decision.shadow_probe)
         self.assertEqual(decision.provider, "cheap", "re-testing the cheap door on purpose")
+
+    def test_a_site_that_relaxes_can_get_its_cheap_door_back(self) -> None:
+        """The four runs that decide whether a price rise is permanent.
+
+        Without this loop the first expensive choice is paid forever: the cheap
+        strategy is below the bar, so it is never used, so it never gathers the
+        evidence that would put it back above the bar. The probe is the only
+        thing that breaks that circle, and it is worth testing as the sequence
+        an operator would actually live through rather than as one call.
+        """
+
+        cheap = FakeProvider("cheap", (strategy("normal", "1"),))
+        dear = FakeProvider("dear", (strategy("normal", "20"),))
+
+        bar = 0.6  # a bar 20 clean results can clear, so the scenario stays short
+
+        # Run 1: the cheap door works and is chosen.
+        self.observe("cheap", "normal", ok=20, fail=0)
+        self.observe("dear", "normal", ok=20, fail=0, cost="20")
+        first = self.router([cheap, dear], minimum_confidence_bound=bar).choose(
+            domain=DOMAIN, url_class=URL_CLASS, verdict=Verdict.BLOCKED
+        )
+        self.assertEqual(first.provider, "cheap")
+
+        # Run 2: the site hardens. The cheap door falls below the bar.
+        self.observe("cheap", "normal", ok=0, fail=30)
+        second = self.router([cheap, dear], minimum_confidence_bound=bar).choose(
+            domain=DOMAIN, url_class=URL_CLASS, verdict=Verdict.BLOCKED
+        )
+        self.assertEqual(second.provider, "dear", "the evidence moved the traffic")
+
+        # Run 3: a probe re-tests the cheap door despite the evidence.
+        probing = self.router(
+            [cheap, dear],
+            minimum_confidence_bound=bar,
+            _rng=lambda: 0.0,
+            shadow_probe_rate=0.05,
+        )
+        probe = probing.choose(domain=DOMAIN, url_class=URL_CLASS, verdict=Verdict.BLOCKED)
+        self.assertTrue(probe.shadow_probe)
+        self.assertEqual(probe.provider, "cheap")
+
+        # ...and the site has relaxed, so the probe succeeds — repeatedly.
+        self.observe("cheap", "normal", ok=100, fail=0)
+
+        # Run 4: no probe needed. The ordinary decision comes back down in price.
+        fourth = self.router([cheap, dear], minimum_confidence_bound=bar).choose(
+            domain=DOMAIN, url_class=URL_CLASS, verdict=Verdict.BLOCKED
+        )
+        self.assertFalse(fourth.shadow_probe)
+        self.assertEqual(fourth.provider, "cheap", "a recovered site must get cheap again")
 
     def test_without_a_probe_the_trusted_option_is_used(self) -> None:
         cheap = FakeProvider("cheap", (strategy("normal", "1"),))

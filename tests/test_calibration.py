@@ -494,6 +494,22 @@ class ReportTests(unittest.TestCase):
         for key in ("exact_usd", "provisional_usd", "unknown_cost_calls"):
             self.assertIn(key, payload)
 
+    def test_discovery_is_reported_as_candidates_never_as_savings(self) -> None:
+        """A PROMISING endpoint is a lead, not a browser call avoided.
+
+        Counting avoided renders for a route nobody has approved invents a
+        benefit from a decision that was never taken — and it is the number
+        somebody would quote to justify the next purchase.
+        """
+
+        payload = self._report().to_dict()
+        rendered = self._report().describe()
+        self.assertNotIn("saved", rendered.lower())
+        self.assertNotIn("avoided", rendered.lower())
+        for entry in payload["discovery"].values():
+            self.assertIn("candidates", entry)
+            self.assertNotIn("browser_calls_avoided", entry)
+
     def test_concentration_is_reported_so_a_single_vendor_is_visible(self) -> None:
         report = self._report()
         self.assertEqual(report.to_dict()["concentration"]["top_provider"], "a")
