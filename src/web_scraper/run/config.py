@@ -13,6 +13,73 @@ from pathlib import Path
 from typing import Any
 
 
+_CONFIG_KEYS = frozenset(
+    {
+        "profile",
+        "state_dir",
+        "run_id",
+        "free_canary",
+        "paid_canary",
+        "discover_api",
+        "seed_urls",
+        "deadline_seconds",
+        "batch_size",
+        "full_review",
+        "allow_private",
+        "dead_zone_after_attempts",
+        "sweep",
+        "adaptive_routing",
+        "browser_pool",
+        "max_browser_contexts",
+        "daily_credit_limit",
+    }
+)
+
+
+def _boolean(data: dict[str, Any], key: str, default: bool) -> bool:
+    value = data.get(key, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"{key} must be a JSON boolean")
+    return value
+
+
+def _integer(data: dict[str, Any], key: str, default: int, *, minimum: int) -> int:
+    value = data.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{key} must be an integer")
+    if value < minimum:
+        raise ValueError(f"{key} must be at least {minimum}")
+    return value
+
+
+def _optional_positive_number(data: dict[str, Any], key: str) -> float | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{key} must be a number or null")
+    result = float(value)
+    if result <= 0:
+        raise ValueError(f"{key} must be greater than zero")
+    return result
+
+
+def _string(data: dict[str, Any], key: str, default: str = "") -> str:
+    value = data.get(key, default)
+    if not isinstance(value, str):
+        raise ValueError(f"{key} must be a string")
+    return value
+
+
+def _string_tuple(data: dict[str, Any], key: str) -> tuple[str, ...]:
+    value = data.get(key, ())
+    if not isinstance(value, (list, tuple)) or any(
+        not isinstance(item, str) or not item.strip() for item in value
+    ):
+        raise ValueError(f"{key} must be an array of non-empty strings")
+    return tuple(value)
+
+
 @dataclass(frozen=True)
 class RunConfig:
     profile_path: Path
@@ -84,35 +151,49 @@ class RunConfig:
     @classmethod
     def from_file(cls, path: str | Path) -> RunConfig:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("run config must be a JSON object")
         return cls.from_dict(data, base_dir=Path(path).parent)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], *, base_dir: Path | None = None) -> RunConfig:
+        unknown = sorted(set(data) - _CONFIG_KEYS)
+        if unknown:
+            raise ValueError(f"unknown run config fields: {', '.join(unknown)}")
         base = base_dir or Path.cwd()
 
-        def resolve(p: str) -> Path:
+        def resolve(key: str, default: str | None = None) -> Path:
+            if default is None and key not in data:
+                raise ValueError(f"missing required run config field: {key}")
+            p = _string(data, key, default or "")
+            if not p.strip():
+                raise ValueError(f"{key} must not be empty")
             path = Path(p)
             return path if path.is_absolute() else (base / path)
 
         return cls(
-            profile_path=resolve(data["profile"]),
-            state_dir=resolve(data.get("state_dir", "state")),
-            run_id=str(data.get("run_id", "")),
-            free_canary=bool(data.get("free_canary", True)),
-            paid_canary=bool(data.get("paid_canary", True)),
-            discover_api=bool(data.get("discover_api", True)),
-            seed_urls=tuple(data.get("seed_urls", ())),
-            deadline_seconds=data.get("deadline_seconds"),
-            batch_size=int(data.get("batch_size", 20)),
-            full_review=bool(data.get("full_review", False)),
-            allow_private=bool(data.get("allow_private", False)),
-            dead_zone_after_attempts=int(data.get("dead_zone_after_attempts", 3)),
-            sweep=bool(data.get("sweep", False)),
-            adaptive_routing=bool(data.get("adaptive_routing", True)),
-            browser_pool=bool(data.get("browser_pool", True)),
-            max_browser_contexts=int(data.get("max_browser_contexts", 4)),
+            profile_path=resolve("profile"),
+            state_dir=resolve("state_dir", "state"),
+            run_id=_string(data, "run_id"),
+            free_canary=_boolean(data, "free_canary", True),
+            paid_canary=_boolean(data, "paid_canary", True),
+            discover_api=_boolean(data, "discover_api", True),
+            seed_urls=_string_tuple(data, "seed_urls"),
+            deadline_seconds=_optional_positive_number(data, "deadline_seconds"),
+            batch_size=_integer(data, "batch_size", 20, minimum=1),
+            full_review=_boolean(data, "full_review", False),
+            allow_private=_boolean(data, "allow_private", False),
+            dead_zone_after_attempts=_integer(
+                data, "dead_zone_after_attempts", 3, minimum=1
+            ),
+            sweep=_boolean(data, "sweep", False),
+            adaptive_routing=_boolean(data, "adaptive_routing", True),
+            browser_pool=_boolean(data, "browser_pool", True),
+            max_browser_contexts=_integer(
+                data, "max_browser_contexts", 4, minimum=1
+            ),
             daily_credit_limit=(
-                str(data["daily_credit_limit"])
+                _string(data, "daily_credit_limit")
                 if data.get("daily_credit_limit") is not None
                 else None
             ),
