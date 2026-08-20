@@ -190,9 +190,7 @@ class GatewayOutcome:
 
         if self.paid is None or not self.paid.attempted:
             return Cost.free()
-        if self.paid.actual_cost is None:
-            return Cost.unknown()
-        return Cost.of(self.paid.actual_cost)
+        return _paid_cost(self.paid)
 
     def to_dict(self) -> dict[str, Any]:
         return {

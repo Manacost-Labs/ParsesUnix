@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from web_scraper.budget import BudgetLedger
 from web_scraper.contracts import Attempt, Cost, Level, Result, Verdict
+from web_scraper.fetchers.gateway import GatewayOutcome
 from web_scraper.observability.metrics import RunMetrics
 from web_scraper.providers.base import (
     ProviderCost,
@@ -25,6 +26,7 @@ from web_scraper.providers.base import (
     ProviderResponse,
 )
 from web_scraper.providers.escalation import PaidEscalator
+from web_scraper.providers.multi_escalation import PaidAttempt as MultiProviderPaidAttempt
 from web_scraper.providers.router import PaidProviderRouter
 from web_scraper.providers.scrape_do import STRATEGIES
 
@@ -202,6 +204,23 @@ class EndToEndCostTests(unittest.TestCase):
         )
         self.assertTrue(paid.unknown_spend)
         self.assertGreater(self.budget.held_credits(), Decimal("0"), "money stays held")
+
+    def test_multi_provider_cost_uses_the_shared_paid_attempt_contract(self) -> None:
+        paid = MultiProviderPaidAttempt(
+            attempted=True,
+            reason="paid attempt via scrape.do:normal",
+            cost=Cost.of("5"),
+        )
+        outcome = GatewayOutcome(
+            result=Result(url=URL, verdict=Verdict.OK),
+            response=None,
+            skipped_routes=(),
+            snapshot_paths=(),
+            paid=paid,
+        )
+
+        self.assertEqual(outcome.cost, Cost.of("5"))
+        self.assertEqual(outcome.to_dict()["cost"]["credits"], "5")
 
 
 if __name__ == "__main__":
