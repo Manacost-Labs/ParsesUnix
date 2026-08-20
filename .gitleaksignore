@@ -1,0 +1,6 @@
+# Synthetic values whose detection is the behavior under test. Keep these as
+# exact fingerprints so no other secret in either test file is suppressed.
+30419dc83dd260822bae0b540d174de3aafc1051:tests/test_redaction.py:jwt:38
+a1c6c379d9b90a97f36f8c588c941fbaf82cca17:tests/test_profile_engineering.py:generic-api-key:434
+tests/test_redaction.py:jwt:38
+tests/test_profile_engineering.py:generic-api-key:434
