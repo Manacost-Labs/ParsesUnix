@@ -58,6 +58,7 @@ def response(
     body: bytes = GOOD_BODY,
     cost: str | None = "1",
     strategy_id: str = "normal",
+    truncated: bool = False,
 ) -> ProviderResponse:
     return ProviderResponse(
         provider="scrape.do",
@@ -68,6 +69,7 @@ def response(
         headers={"Content-Type": "text/html"},
         cost=ProviderCost.parse(cost) if cost is not None else ProviderCost.unattributed(),
         request_id="req-1",
+        truncated=truncated,
     )
 
 
@@ -222,6 +224,16 @@ class ProviderFailureTests(EscalatorCase):
 
 
 class ValidationTests(EscalatorCase):
+    def test_a_truncated_body_is_parse_fail_even_when_its_prefix_looks_valid(self) -> None:
+        provider = FakeProvider(response=response(truncated=True))
+
+        outcome = self.attempt(provider)
+
+        self.assertFalse(outcome.succeeded)
+        assert outcome.triage is not None
+        self.assertEqual(outcome.triage.verdict, Verdict.PARSE_FAIL)
+        self.assertIn("incomplete", outcome.triage.reason)
+
     def test_a_provider_200_carrying_a_challenge_is_not_success(self) -> None:
         challenge = b"<html><title>Just a moment...</title>checking your browser</html>"
         provider = FakeProvider(response=response(body=challenge))

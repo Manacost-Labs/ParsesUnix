@@ -37,9 +37,20 @@ def strategy(sid, cost):
 
 
 class Vendor:
-    def __init__(self, name, strategies, *, body=GOOD, cost="1", error=None, target_status=200):
+    def __init__(
+        self,
+        name,
+        strategies,
+        *,
+        body=GOOD,
+        cost="1",
+        error=None,
+        target_status=200,
+        truncated=False,
+    ):
         self.name, self._strategies = name, strategies
         self._body, self._cost, self._error, self._status = body, cost, error, target_status
+        self._truncated = truncated
         self.calls: list[str] = []
 
     def strategies(self):
@@ -59,6 +70,7 @@ class Vendor:
             cost=ProviderCost.parse(self._cost)
             if self._cost is not None
             else ProviderCost.unattributed(),
+            truncated=self._truncated,
         )
 
 
@@ -222,6 +234,31 @@ class RefusalTests(EscalatorCase):
 
 
 class ValidationTests(EscalatorCase):
+    def test_a_truncated_provider_body_is_never_success_or_learned_as_success(self) -> None:
+        vendor = Vendor(
+            "a",
+            (strategy("normal", "1"),),
+            body=GOOD,
+            truncated=True,
+        )
+
+        outcome = self.attempt([vendor])
+
+        self.assertFalse(outcome.succeeded)
+        assert outcome.triage is not None
+        self.assertEqual(outcome.triage.verdict, Verdict.PARSE_FAIL)
+        self.assertIn("incomplete", outcome.triage.reason)
+        record = self.stats.get(
+            ProviderStrategyKey(
+                provider="a",
+                strategy_id="normal",
+                domain=DOMAIN,
+                url_class=URL_CLASS,
+            )
+        )
+        assert record is not None
+        self.assertEqual(record.validated_successes, 0)
+
     def test_a_vendor_200_carrying_a_challenge_is_not_success(self) -> None:
         vendor = Vendor(
             "a", (strategy("normal", "1"),), body=b"<html><title>Just a moment...</title></html>"

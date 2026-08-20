@@ -197,11 +197,20 @@ class PaidEscalator:
         unknown = reported is None
 
         # 8. Canonical validation. The provider's 200 proves nothing about content.
-        triage = classify_response(
-            status=response.target_status,
-            body=response.body,
-            headers=response.headers,
-            rules=rules or ContentRules(min_body_bytes=1),
+        triage = (
+            TriageResult(
+                Verdict.PARSE_FAIL,
+                "provider response hit the body-size ceiling and is incomplete",
+                response.target_status,
+                len(response.body),
+            )
+            if response.truncated
+            else classify_response(
+                status=response.target_status,
+                body=response.body,
+                headers=response.headers,
+                rules=rules or ContentRules(min_body_bytes=1),
+            )
         )
         self.breakers.record_verdict(self.provider.name, strategy.id, triage.verdict)
 
