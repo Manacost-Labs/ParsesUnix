@@ -5,6 +5,14 @@
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-08-22
+
+### Fixed
+
+- Cloudflare runtime identifiers `cf-chl-` and `cf_chl_` no longer classify a
+  fully rendered page as `SOFT_BLOCK`; real challenge pages remain detected by
+  their interstitial text and vendor-specific challenge signatures.
+
 ## [0.10.0] - 2026-08-20
 
 ### Added

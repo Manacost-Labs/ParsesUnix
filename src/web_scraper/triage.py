@@ -17,8 +17,6 @@ BLOCK_SIGNATURES = (
     "attention required! | cloudflare",
     "sorry, you have been blocked",
     "enable javascript and cookies to continue",
-    "cf-chl-",
-    "cf_chl_",
     "cloudflare ray id",
     "verify you are human",
     "checking your browser",
@@ -27,10 +25,10 @@ BLOCK_SIGNATURES = (
     # Two markers are deliberately NOT here, both verified against live pages:
     #   * a bare "captcha" — matches legitimate markup such as a WordPress
     #     theme's `tds_captcha` JS variable;
-    #   * "/cdn-cgi/challenge-platform" — Cloudflare ships this JS-detection
-    #     bundle on ORDINARY pages too (hsguru.com serves ~19k chars of real
-    #     content alongside it), so it proves bot management is enabled, not
-    #     that this response was blocked.
+    #   * "/cdn-cgi/challenge-platform", "cf-chl-" and "cf_chl_" —
+    #     Cloudflare ships these runtime identifiers on ORDINARY pages too
+    #     (including fully rendered HSGuru matchup tables), so they prove bot
+    #     management is enabled, not that this response was blocked.
     # A signature must appear only when the response really is a block.
     "g-recaptcha-response",
     "hcaptcha.com/captcha",

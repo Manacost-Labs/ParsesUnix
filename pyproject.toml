@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "web-scraper-core"
-version = "0.10.0"
+version = "0.10.1"
 description = "Importable core of the web-scraper skill: contracts, triage, probe, profiles, budget, and the free Fetch Gateway (L0-L2)"
 readme = "README.md"
 requires-python = ">=3.11"

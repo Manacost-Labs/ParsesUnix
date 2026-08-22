@@ -102,6 +102,25 @@ class TriageTests(unittest.TestCase):
         result = classify_response(status=200, body=body, headers={"Content-Type": "text/html"})
         self.assertEqual(result.verdict, Verdict.SOFT_BLOCK)
 
+    def test_cloudflare_runtime_identifiers_inside_real_page_are_not_a_block(self) -> None:
+        body = (
+            "<html><body><main>"
+            + "<article>matchup table with validated content</article>" * 200
+            + '<script>window.cf_chl_opt={};const widget="cf-chl-widget-container";</script>'
+            + "</main></body></html>"
+        )
+        result = classify_response(
+            status=200,
+            body=body,
+            headers={"Content-Type": "text/html"},
+            rules=ContentRules(
+                min_body_bytes=2_000,
+                canary="matchup",
+                expected_content_type="html",
+            ),
+        )
+        self.assertEqual(result.verdict, Verdict.OK)
+
 
 class JsonPathValidation(unittest.TestCase):
     """The shape a listing endpoint actually has."""
