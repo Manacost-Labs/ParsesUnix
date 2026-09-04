@@ -5,6 +5,19 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- The ParsesUnix Runner and profile acceptance path now use the shared JSON
+  response extractor and pass response headers through quorum checks. JSON
+  values keep their types, and JSON quorum comparisons support arrays and
+  objects without constructing an HTML DOM.
+- Staging preserves extractor provenance and schema drift reads flattened
+  staged rows correctly. Schema snapshots count absent keys across the field
+  union, distinguish valid `0`/`False`, and carry schema version 2 metadata.
+- Legacy snapshots mark null-rate statistics as unknown while deterministic
+  record-count, critical-field, type, provenance, and pagination checks still
+  block unsafe promotion. Unsupported future snapshot versions are rejected.
+
 ## [0.10.1] - 2026-08-22
 
 ### Fixed
