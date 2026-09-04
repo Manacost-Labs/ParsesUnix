@@ -170,6 +170,50 @@ class SnapshotTests(unittest.TestCase):
         snapshot = SchemaSnapshot.from_rows(rows(10))
         self.assertNotIn("_extractor_source", snapshot.fields)
 
+    def test_missing_keys_count_against_the_union_of_fields(self) -> None:
+        snapshot = SchemaSnapshot.from_rows(
+            [{"name": "a"}, {"name": "b"}, {"name": "c"}, {"other": "d"}]
+        )
+        self.assertEqual(snapshot.null_rates["name"], 0.25)
+        self.assertEqual(snapshot.null_rates["other"], 0.75)
+
+    def test_zero_and_false_are_not_missing(self) -> None:
+        snapshot = SchemaSnapshot.from_rows([{"count": 0, "active": False}])
+        self.assertEqual(snapshot.null_rates, {"active": 0.0, "count": 0.0})
+
+    def test_snapshot_version_is_explicit_and_old_aggregates_are_legacy(self) -> None:
+        snapshot = SchemaSnapshot.from_rows([{"name": "a"}])
+        self.assertEqual(snapshot.schema_version, 2)
+        self.assertEqual(snapshot.to_dict()["schema_version"], 2)
+        legacy = SchemaSnapshot.from_dict({"record_count": 1, "types": {"name": ["str"]}})
+        self.assertEqual(legacy.schema_version, 1)
+        self.assertTrue(legacy.legacy)
+
+    def test_legacy_baseline_is_explicitly_unknown_not_compared(self) -> None:
+        legacy = SchemaSnapshot.from_dict({"record_count": 1, "types": {"name": ["str"]}})
+        current = SchemaSnapshot.from_rows([{"name": "new"}])
+        report = check_drift(current, legacy, critical_fields=["name"])
+        self.assertEqual(report.verdict, DriftVerdict.UNKNOWN_BASELINE)
+        self.assertTrue(report.verdict.allows_promotion)
+        self.assertEqual(report.findings[0].kind, "legacy_baseline")
+
+    def test_legacy_baseline_still_blocks_known_critical_field_loss(self) -> None:
+        legacy = SchemaSnapshot.from_dict({"record_count": 2, "types": {"name": ["str"]}})
+        current = SchemaSnapshot.from_rows([{"other": "x"}, {"other": "y"}])
+        report = check_drift(current, legacy, critical_fields=["name"])
+        self.assertEqual(report.verdict, DriftVerdict.BLOCK_PROMOTION)
+        self.assertIn("field_disappeared", {f.kind for f in report.blocking})
+
+    def test_legacy_baseline_still_blocks_incomplete_pagination(self) -> None:
+        legacy = SchemaSnapshot.from_dict({"record_count": 2, "types": {"name": ["str"]}})
+        current = SchemaSnapshot.from_rows([{"name": "x"}, {"name": "y"}])
+        report = check_drift(current, legacy, pagination_complete=False)
+        self.assertEqual(report.verdict, DriftVerdict.BLOCK_PROMOTION)
+
+    def test_newer_snapshot_version_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            SchemaSnapshot.from_dict({"schema_version": 3, "record_count": 1})
+
 
 if __name__ == "__main__":
     unittest.main()

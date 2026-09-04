@@ -67,6 +67,7 @@ class DriftVerdict(StrEnum):
     #: Nothing to compare against. Distinct from PASS on purpose: an operator
     #: reading "PASS" is entitled to believe something was checked.
     PASS_WITHOUT_BASELINE = "PASS_WITHOUT_BASELINE"  # noqa: S105 - a verdict
+    UNKNOWN_BASELINE = "UNKNOWN_BASELINE"
     WARN = "WARN"
     BLOCK_PROMOTION = "BLOCK_PROMOTION"
 
@@ -76,7 +77,7 @@ class DriftVerdict(StrEnum):
 
     @property
     def was_evaluated(self) -> bool:
-        return self is not DriftVerdict.PASS_WITHOUT_BASELINE
+        return self not in {DriftVerdict.PASS_WITHOUT_BASELINE, DriftVerdict.UNKNOWN_BASELINE}
 
 
 @dataclass(frozen=True)
@@ -118,6 +119,11 @@ class SchemaSnapshot:
     null_rates: dict[str, float] = field(default_factory=dict)
     #: field -> which extractor produced it, and how often.
     provenance: dict[str, dict[str, int]] = field(default_factory=dict)
+    schema_version: int = 2
+
+    @property
+    def legacy(self) -> bool:
+        return self.schema_version < 2
 
     @classmethod
     def from_rows(
@@ -131,11 +137,11 @@ class SchemaSnapshot:
         missing: dict[str, int] = {}
         provenance: dict[str, dict[str, int]] = {}
 
+        field_names = {name for row in rows for name in row if not name.startswith("_")}
         for row in rows:
             sources = row.get(provenance_key) or {}
-            for name, value in row.items():
-                if name.startswith("_"):
-                    continue
+            for name in field_names:
+                value = row.get(name)
                 types.setdefault(name, set()).add(_type_name(value))
                 if value in (None, ""):
                     missing[name] = missing.get(name, 0) + 1
@@ -152,6 +158,24 @@ class SchemaSnapshot:
             provenance=provenance,
         )
 
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> SchemaSnapshot:
+        version = int(data.get("schema_version", 1))
+        if version > 2:
+            raise ValueError(f"unsupported schema snapshot version: {version}")
+        types = {
+            str(k): frozenset(str(item) for item in values)
+            for k, values in (data.get("types") or {}).items()
+        }
+        null_rates = {str(k): float(v) for k, v in (data.get("null_rates") or {}).items()}
+        return cls(
+            record_count=int(data.get("record_count", 0)),
+            types=types,
+            null_rates=null_rates,
+            provenance=dict(data.get("provenance") or {}),
+            schema_version=version,
+        )
+
     @property
     def fields(self) -> frozenset[str]:
         return frozenset(self.types)
@@ -164,6 +188,7 @@ class SchemaSnapshot:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "schema_version": self.schema_version,
             "record_count": self.record_count,
             "types": {k: sorted(v) for k, v in sorted(self.types.items())},
             "null_rates": {k: round(v, 4) for k, v in sorted(self.null_rates.items())},
@@ -238,8 +263,18 @@ def check_drift(
         # would produce a gate that always passes and looks like it checked, so
         # the verdict names the situation instead of implying an evaluation.
         return DriftReport(DriftVerdict.PASS_WITHOUT_BASELINE, (), None, current)
-
+    legacy_baseline = baseline.legacy
     findings: list[DriftFinding] = []
+    if legacy_baseline:
+        findings.append(
+            DriftFinding(
+                kind="legacy_baseline",
+                detail="legacy baseline null-rate statistics are unknown; deterministic checks remain active",
+                severity="warn",
+                observed=f"schema v{current.schema_version}",
+                baseline="legacy",
+            )
+        )
     critical = set(critical_fields)
 
     # 1. Bulk record loss.
@@ -299,7 +334,9 @@ def check_drift(
 
     # 4. Null-rate growth, weighted by whether the field matters.
     for name in sorted(baseline.fields & current.fields):
-        base_rate = baseline.null_rates.get(name, 0.0)
+        if legacy_baseline or name not in baseline.null_rates:
+            continue
+        base_rate = baseline.null_rates[name]
         rate = current.null_rates.get(name, 0.0)
         # Both tests must fire: a large relative move AND a material absolute
         # one. Either alone produces alarms nobody can act on.
@@ -356,6 +393,8 @@ def check_drift(
 
     if any(f.blocks for f in findings):
         verdict = DriftVerdict.BLOCK_PROMOTION
+    elif legacy_baseline:
+        verdict = DriftVerdict.UNKNOWN_BASELINE
     elif any(f.severity == "warn" for f in findings):
         verdict = DriftVerdict.WARN
     else:
