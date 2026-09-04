@@ -75,6 +75,31 @@ def make_profile():
     )
 
 
+def make_json_profile():
+    return parse_profile(
+        {
+            "site": "demo-news.example",
+            "authorization": {"public_data_only": True},
+            "url_classes": {
+                "article": {
+                    "match": "^https://demo-news\\.example/api/",
+                    "expected_content_type": "json",
+                    "validation": {
+                        "min_body_bytes": 2,
+                        "required_fields": ["title"],
+                        "required_json_paths": ["title"],
+                    },
+                    "routes": {"primary": {"type": "json_api", "level": "L0"}},
+                    "extractors": [{"kind": "json", "fields": {"title": "title"}}],
+                    "quorum_fields": ["title"],
+                    "retry": {"max_attempts": 1, "backoff_seconds": 0},
+                    "promote": {"min_completeness": 0.95},
+                }
+            },
+        }
+    )
+
+
 class RunnerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
@@ -139,6 +164,81 @@ class RunnerTests(unittest.TestCase):
         runner2 = self.build_runner(responses, [])
         runner2.run()
         self.assertEqual(runner2.queue.get(SUCCESS).status, UrlStatus.DONE)
+
+    def test_json_full_runner_publishes_and_second_run_keeps_typed_data(self) -> None:
+        url = "https://demo-news.example/api/article/1"
+        body = b'{"title": "Typed JSON title", "count": 0}'
+        response = RawResponse(
+            requested_url=url,
+            final_url=url,
+            status=200,
+            headers={"Content-Type": "application/json"},
+            body=body,
+            elapsed_ms=1,
+        )
+        profile = make_json_profile()
+
+        class Fake:
+            def fetch(self, requested, *, headers=None):
+                return response
+
+        gateway = FetchGateway(
+            profile,
+            transport_provider=lambda route, url_class, requested: Fake(),
+            pacer=NoWaitPacer(),
+        )
+        config = RunConfig(
+            profile_path=self.state / "p.json", state_dir=self.state, seed_urls=(url,)
+        )
+        runner = Runner(config, profile=profile, gateway=gateway, wall_clock=lambda: self.wall[0])
+        first = runner.run()
+        self.assertTrue(first.promote["ok"])
+        self.assertEqual(runner.dataset.clean_rows()[0]["title"], "Typed JSON title")
+        self.assertEqual(
+            runner.dataset.clean_rows()[0]["_extractor_source"], {"title": "json_path"}
+        )
+
+        changed_response = RawResponse(
+            requested_url=url,
+            final_url=url,
+            status=200,
+            headers={"Content-Type": "application/json"},
+            body=b'{"title": "Changed JSON title", "count": 0}',
+            elapsed_ms=1,
+        )
+
+        class ChangedFake:
+            def fetch(self, requested, *, headers=None):
+                return changed_response
+
+        changed_gateway = FetchGateway(
+            profile,
+            transport_provider=lambda route, url_class, requested: ChangedFake(),
+            pacer=NoWaitPacer(),
+        )
+        self.wall[0] += 100
+        runner2 = Runner(
+            RunConfig(
+                profile_path=self.state / "p.json",
+                state_dir=self.state,
+                seed_urls=(url,),
+                full_review=True,
+                run_id="second-json-run",
+            ),
+            profile=profile,
+            gateway=changed_gateway,
+            wall_clock=lambda: self.wall[0],
+        )
+        second = runner2.run()
+        self.assertTrue(second.promote["ok"])
+        self.assertEqual(runner2.dataset.clean_rows()[0]["title"], "Changed JSON title")
+        self.assertEqual(
+            runner2.dataset.clean_rows()[0]["_extractor_source"], {"title": "json_path"}
+        )
+        self.assertEqual(second.promote["drift"]["current"]["types"]["title"], ["str"])
+        self.assertEqual(
+            second.promote["drift"]["baseline"]["provenance"]["title"], {"json_path": 1}
+        )
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from web_scraper.contracts import ContentKind
-from web_scraper.extract import extract_fields, extract_response
+from web_scraper.extract import extract_fields, extract_response, run_quorum
 from web_scraper.extract.json_path import JsonPathError, validate_path, walk_many
 
 DOCUMENT = {
@@ -165,6 +165,36 @@ class ExtractorTests(unittest.TestCase):
             content_kind=ContentKind.JSON,
         )
         self.assertEqual(calls, [], "a DOM was built for a JSON response")
+
+    def test_quorum_uses_the_same_json_response_path(self) -> None:
+        extractors = [
+            {"kind": "json", "fields": {"score": "data.character.score"}},
+            {"kind": "json", "fields": {"score": "data.character.score"}},
+        ]
+        result = run_quorum(
+            BODY,
+            headers={"Content-Type": "application/json"},
+            extractors=extractors,
+            quorum_fields=["score"],
+            base_url="https://example.test/api",
+        )
+        self.assertEqual(result.data["score"], 93)
+        self.assertEqual(result.sources["score"], "json_path")
+        self.assertEqual(result.quorum["score"], "high")
+
+    def test_quorum_preserves_unhashable_json_values(self) -> None:
+        body = json.dumps({"items": [{"id": 1}, {"id": 2}]}).encode()
+        result = run_quorum(
+            body,
+            headers={"Content-Type": "application/json"},
+            extractors=[
+                {"kind": "json", "fields": {"items": "items"}},
+                {"kind": "json", "fields": {"items": "items"}},
+            ],
+            quorum_fields=["items"],
+        )
+        self.assertEqual(result.data["items"], [{"id": 1}, {"id": 2}])
+        self.assertEqual(result.quorum["items"], "high")
 
 
 class HtmlStillWorksTests(unittest.TestCase):

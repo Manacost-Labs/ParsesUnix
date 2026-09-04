@@ -28,7 +28,7 @@ from web_scraper.discovery import (
     observed_from_mapping,
     summarise,
 )
-from web_scraper.extract import extract_fields, run_quorum
+from web_scraper.extract import extract_response, run_quorum
 from web_scraper.fetchers import CircuitBreaker, FetchGateway, RawResponse
 from web_scraper.fetchers.browser_pool import BrowserPool
 from web_scraper.fetchers.browser_worker import BrowserWorker
@@ -873,13 +873,21 @@ class Runner:
 
         extractors = [dict(e) for e in url_class.extractors]
         target_fields = list(url_class.required_fields) or ["title"]
-        extraction = extract_fields(
-            response.body, extractors=extractors, fields=target_fields, base_url=response.final_url
+        extraction, _ = extract_response(
+            response.body,
+            headers=response.headers,
+            extractors=extractors,
+            fields=target_fields,
+            base_url=response.final_url,
         )
+        data = dict(extraction.data)
+        if extraction.sources:
+            data["_extractor_source"] = dict(extraction.sources)
         conflicts = 0
         if url_class.quorum_fields:
             quorum = run_quorum(
                 response.body,
+                headers=response.headers,
                 extractors=extractors,
                 quorum_fields=list(url_class.quorum_fields),
                 base_url=response.final_url,
@@ -897,7 +905,7 @@ class Runner:
         self.dataset.stage(
             natural_key,
             url=url,
-            data=extraction.data,
+            data=data,
             content_hash=new_hash,
             conflict=bool(conflicts),
         )
@@ -1022,7 +1030,7 @@ class Runner:
         if not staged:
             return None
         baseline_rows = self.dataset.clean_rows_with_meta()
-        current = SchemaSnapshot.from_rows([dict(r.get("data") or {}) for r in staged])
+        current = SchemaSnapshot.from_rows([dict(r) for r in staged])
         baseline = (
             SchemaSnapshot.from_rows([dict(r.get("data") or {}) for r in baseline_rows])
             if baseline_rows

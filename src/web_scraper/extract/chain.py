@@ -352,6 +352,7 @@ def extract_response(
 def run_quorum(
     body: bytes | str,
     *,
+    headers: Mapping[str, str] | None = None,
     extractors: Sequence[Mapping[str, Any]],
     quorum_fields: Sequence[str],
     field_kinds: Mapping[str, str] | None = None,
@@ -360,8 +361,16 @@ def run_quorum(
     """Cross-check critical fields across every extractor that can supply them."""
 
     text = _decode(body)
-    tree = dom.parse_html(text)
-    app_state = _extract_app_state(text)
+    response_kind = detect_content_kind(body if isinstance(body, bytes) else body.encode(), headers)
+    is_json = response_kind is ContentKind.JSON
+    json_document: Any = None
+    if is_json:
+        try:
+            json_document = json.loads(text.lstrip("\ufeff \t\r\n"))
+        except json.JSONDecodeError:
+            is_json = False
+    tree = dom.Node("", {}, []) if is_json else dom.parse_html(text)
+    app_state = None if is_json else _extract_app_state(text)
     field_kinds = field_kinds or {}
 
     # Collect, per field, the value each extractor produced.
@@ -369,9 +378,9 @@ def run_quorum(
     all_values: dict[str, Any] = {}
     sources: dict[str, str] = {}
     for spec in extractors:
-        kind = str(spec.get("kind"))
+        extractor_kind = str(spec.get("kind"))
         produced = _one_extractor(
-            kind,
+            extractor_kind,
             spec,
             text=text,
             tree=tree,
@@ -379,22 +388,29 @@ def run_quorum(
             fields=quorum_fields,
             field_kinds=field_kinds,
             base_url=base_url,
+            json_document=json_document,
         )
         for f, value in produced.items():
             if value is not None and value != "":
-                per_field.setdefault(f, []).append((kind, value))
+                per_field.setdefault(f, []).append((extractor_kind, value))
 
     quorum: dict[str, str] = {}
     conflicts: list[str] = []
     for f in quorum_fields:
         observations = per_field.get(f, [])
-        distinct = {v for _, v in observations}
+        # JSON arrays/objects are valid quorum values but are unhashable.
+        # Compare a deterministic representation while retaining the original
+        # typed value for the result.
+        distinct = {
+            json.dumps(v, sort_keys=True, separators=(",", ":"), default=repr)
+            for _, v in observations
+        }
         if not observations:
             quorum[f] = "missing"
             continue
         chosen_kind, chosen_value = observations[0]
         all_values[f] = chosen_value
-        sources[f] = chosen_kind
+        sources[f] = "json_path" if chosen_kind == "json" else chosen_kind
         if len(distinct) == 1 and len(observations) >= 2:
             quorum[f] = "high"
         elif len(distinct) == 1:

@@ -112,6 +112,7 @@ def run_case(
         if url_class.quorum_fields:
             quorum = run_quorum(
                 fixture.body,
+                headers=fixture.headers,
                 extractors=list(url_class.extractors),
                 quorum_fields=list(url_class.quorum_fields),
                 base_url=fixture.url or case.url or None,
