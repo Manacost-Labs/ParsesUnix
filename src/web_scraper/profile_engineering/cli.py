@@ -38,6 +38,7 @@ from web_scraper.profile_engineering.certification import (
     MutationOutcome,
     certify,
 )
+from web_scraper.profile_engineering.comparison import compare_corpus
 from web_scraper.profile_engineering.corpus import load_corpus
 from web_scraper.profile_engineering.health import (
     HealthThresholds,
@@ -114,6 +115,41 @@ def _cmd_test(args: argparse.Namespace) -> int:
     outcomes = run_corpus(profile, corpus, fixtures_root=root / "fixtures")
     print(summarise(outcomes))
     return 0 if all(o.passed for o in outcomes) else 1
+
+
+def _cmd_compare(args: argparse.Namespace) -> int:
+    """Compare two profiles only against saved corpus fixtures; never activate either."""
+
+    profile_path, corpus_path, root = _package_paths(args, args.site)
+    candidate_path = Path(args.candidate_profile) if args.candidate_profile else profile_path
+    errors: list[str] = []
+    profiles: dict[str, Any] = {}
+    for label, path in (("baseline", Path(args.baseline_profile)), ("candidate", candidate_path)):
+        try:
+            profile = load_profile(path)
+        except (OSError, ProfileError) as exc:
+            errors.append(f"{label} profile is invalid: {exc}")
+            continue
+        if profile.site != args.site:
+            errors.append(f"{label} profile site {profile.site!r} does not match {args.site!r}")
+            continue
+        profiles[label] = profile
+    try:
+        corpus = load_corpus(corpus_path)
+    except (OSError, ValueError) as exc:
+        errors.append(f"corpus is invalid: {exc}")
+        corpus = None
+    if corpus is not None and corpus.domain != args.site:
+        errors.append(f"corpus domain {corpus.domain!r} does not match {args.site!r}")
+
+    if errors or corpus is None or set(profiles) != {"baseline", "candidate"}:
+        print(json.dumps({"ok": False, "integrity_errors": errors, "cases": []}, indent=2))
+        return 2
+    report = compare_corpus(
+        profiles["baseline"], profiles["candidate"], corpus, fixtures_root=root / "fixtures"
+    )
+    print(json.dumps(report.to_dict(), indent=2))
+    return 0 if report.ok else 1
 
 
 def _cmd_certify(args: argparse.Namespace) -> int:
@@ -451,6 +487,16 @@ def build_parser() -> argparse.ArgumentParser:
     test = sub.add_parser("test", help="run the acceptance corpus")
     test.add_argument("site")
     test.set_defaults(func=_cmd_test)
+
+    compare = sub.add_parser("compare", help="compare two profiles on the same saved corpus")
+    compare.add_argument("site")
+    compare.add_argument("--baseline-profile", required=True)
+    compare.add_argument(
+        "--candidate-profile",
+        default=None,
+        help="candidate profile path; defaults to SITE/profile.yaml under --root",
+    )
+    compare.set_defaults(func=_cmd_compare)
 
     cert = sub.add_parser("certify", help="run every check and record the verdict")
     cert.add_argument("site")

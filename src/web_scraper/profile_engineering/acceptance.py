@@ -80,6 +80,21 @@ def load_fixture(directory: str | Path) -> Fixture:
     )
 
 
+def load_fixture_snapshots(
+    corpus: AcceptanceCorpus, *, fixtures_root: str | Path
+) -> dict[str, Fixture]:
+    """Load each named corpus fixture once for a deterministic multi-profile run."""
+
+    root = Path(fixtures_root)
+    snapshots: dict[str, Fixture] = {}
+    for case in corpus.cases:
+        if not case.fixture:
+            raise ValueError(f"case {case.id!r} has no fixture")
+        if case.fixture not in snapshots:
+            snapshots[case.fixture] = load_fixture(root / case.fixture)
+    return snapshots
+
+
 def _is_present(value: Any) -> bool:
     return value is not None and value != "" and value != [] and value != {}
 
@@ -226,6 +241,7 @@ def run_corpus(
     corpus: AcceptanceCorpus,
     *,
     fixtures_root: str | Path,
+    fixtures: Mapping[str, Fixture] | None = None,
 ) -> list[CaseOutcome]:
     """Run every case that has a fixture, and say plainly which had none.
 
@@ -263,7 +279,10 @@ def run_corpus(
             )
             continue
         directory = root / case.fixture
-        if not directory.exists():
+        if fixtures is not None and case.fixture in fixtures:
+            outcomes.append(run_case(case, fixtures[case.fixture], url_class))
+            continue
+        if fixtures is not None or not directory.exists():
             outcomes.append(
                 CaseOutcome(
                     case_id=case.id,
