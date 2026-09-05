@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-09-05
+
 ### Fixed
 
 - The ParsesUnix Runner and profile acceptance path now use the shared JSON
@@ -17,6 +19,20 @@
 - Legacy snapshots mark null-rate statistics as unknown while deterministic
   record-count, critical-field, type, provenance, and pagination checks still
   block unsafe promotion. Unsupported future snapshot versions are rejected.
+- Required fields are checked per URL class, independently of quorum selection.
+  Critical and unclassified extractor conflicts block publication, including the
+  first snapshot. Explicit noncritical conflicts retain provenance.
+- Repeated field-specific extractor declarations cannot manufacture high quorum.
+- Acceptance counts distinct extracted records, preserves `0`/`False`, and checks
+  minimum volume, explicit identities and typed expected values. Collections name
+  `records_field`; optional `record_identity_field` deduplicates by identity.
+
+### Compatibility
+
+- The standalone DatasetStore adds nullable staging metadata columns; clean/LKG
+  tables are unchanged. The embedded API transport does not instantiate this store.
+- This is a bounded quality patch, not completion of the broader parser audit.
+  Pagination, multi-owner budget recovery and all-source context proof remain open.
 
 ## [0.10.1] - 2026-08-22
 

@@ -872,7 +872,15 @@ class Runner:
         natural_key = queued.natural_key or normalize_url(url)
 
         extractors = [dict(e) for e in url_class.extractors]
-        target_fields = list(url_class.required_fields) or ["title"]
+        # Required fields remain first (and therefore preserve profile order),
+        # with importance and quorum declarations adding their own fields.  A
+        # quorum-only field must be staged too or its validation is ceremonial.
+        target_fields = list(url_class.required_fields)
+        for field in (*url_class.field_importance, *url_class.quorum_fields):
+            if field not in target_fields:
+                target_fields.append(field)
+        if not target_fields:
+            target_fields = ["title"]
         extraction, _ = extract_response(
             response.body,
             headers=response.headers,
@@ -908,6 +916,8 @@ class Runner:
             data=data,
             content_hash=new_hash,
             conflict=bool(conflicts),
+            url_class=url_class.name,
+            conflict_fields=quorum.conflicts if url_class.quorum_fields else (),
         )
         self.queue.mark_done(url, verdict="OK", content_hash=new_hash, natural_key=natural_key)
         self.metrics.observe(
@@ -958,13 +968,13 @@ class Runner:
         return summary
 
     def _promote(self) -> dict[str, Any] | None:
-        required = sorted(
-            {
-                f
-                for cls in self.profile.url_classes.values()
-                for f in (cls.quorum_fields or cls.required_fields)
-            }
-        )
+        # Quorum must never replace required fields. Legacy profiles can also
+        # declare quorum alone; retain those requirements for compatibility.
+        required_by_class = {
+            name: tuple(dict.fromkeys((*cls.required_fields, *cls.quorum_fields)))
+            for name, cls in self.profile.url_classes.items()
+        }
+        required = sorted({field for fields in required_by_class.values() for field in fields})
         if not required:
             return None
         if not self.dataset.staged_rows():
@@ -1006,6 +1016,11 @@ class Runner:
 
         decision = self.dataset.promote(
             required_fields=required,
+            required_fields_by_class=required_by_class,
+            min_completeness_by_class={
+                name: float(cls.promote.get("min_completeness", 0.95))
+                for name, cls in self.profile.url_classes.items()
+            },
             expected_count=None,
             min_completeness=min_completeness,
             max_null_rate_growth=max_growth,

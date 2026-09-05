@@ -84,6 +84,11 @@ class CorpusCase:
     expect_absent_fields: tuple[str, ...] = ()
     expect_min_records: int | None = None
     notes: str = ""
+    #: Extracted collection field; omit for the Runner's single-record page mode.
+    #: Counts distinct nonempty objects, never scalar arrays or column count.
+    records_field: str = ""
+    record_identity_field: str = ""
+    expect_values: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def is_negative(self) -> bool:
@@ -108,6 +113,12 @@ class CorpusCase:
             payload["expect_min_records"] = self.expect_min_records
         if self.notes:
             payload["notes"] = self.notes
+        if self.records_field:
+            payload["records_field"] = self.records_field
+        if self.record_identity_field:
+            payload["record_identity_field"] = self.record_identity_field
+        if self.expect_values:
+            payload["expect_values"] = dict(self.expect_values)
         return payload
 
     @classmethod
@@ -127,6 +138,9 @@ class CorpusCase:
                 else None
             ),
             notes=str(payload.get("notes", "")),
+            records_field=str(payload.get("records_field", "")),
+            record_identity_field=str(payload.get("record_identity_field", "")),
+            expect_values=dict(payload.get("expect_values", {})),
         )
 
 

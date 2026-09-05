@@ -180,7 +180,8 @@ class ExtractorTests(unittest.TestCase):
         )
         self.assertEqual(result.data["score"], 93)
         self.assertEqual(result.sources["score"], "json_path")
-        self.assertEqual(result.quorum["score"], "high")
+        # Repeating an identical path is one observation, not independent evidence.
+        self.assertEqual(result.quorum["score"], "medium")
 
     def test_quorum_preserves_unhashable_json_values(self) -> None:
         body = json.dumps({"items": [{"id": 1}, {"id": 2}]}).encode()
@@ -194,7 +195,7 @@ class ExtractorTests(unittest.TestCase):
             quorum_fields=["items"],
         )
         self.assertEqual(result.data["items"], [{"id": 1}, {"id": 2}])
-        self.assertEqual(result.quorum["items"], "high")
+        self.assertEqual(result.quorum["items"], "medium")
 
 
 class HtmlStillWorksTests(unittest.TestCase):

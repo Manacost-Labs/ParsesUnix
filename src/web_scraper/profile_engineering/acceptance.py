@@ -80,6 +80,34 @@ def load_fixture(directory: str | Path) -> Fixture:
     )
 
 
+def _is_present(value: Any) -> bool:
+    return value is not None and value != "" and value != [] and value != {}
+
+
+def _extracted_record_count(
+    data: Mapping[str, Any], records_field: str, identity_field: str = ""
+) -> int | None:
+    """Measure extraction output without guessing which list contains entities.
+
+    A collection must explicitly name its extracted field. Exact duplicate
+    objects count once; identity/schema validation remains the profile's job.
+    A scalar or mixed collection is unknown, not evidence of completeness.
+    """
+    if not records_field:
+        return int(any(_is_present(value) for value in data.values()))
+    records = data.get(records_field)
+    if records is None:
+        return 0
+    if not isinstance(records, list) or any(
+        not isinstance(row, dict) or not row for row in records
+    ):
+        return None
+    identities = [row.get(identity_field) for row in records] if identity_field else records
+    if identity_field and any(type(key) not in (str, int) or key == "" for key in identities):
+        return None
+    return len({json.dumps(key, sort_keys=True, separators=(",", ":")) for key in identities})
+
+
 def run_case(
     case: CorpusCase,
     fixture: Fixture,
@@ -98,17 +126,32 @@ def run_case(
     fields_found: dict[str, bool] = {}
     conflicts: tuple[str, ...] = ()
     comparisons = 0
-    declared = tuple(url_class.field_importance)
+    records: int | None = 0
+    extracted_data: dict[str, Any] = {}
+    declared = tuple(
+        dict.fromkeys(
+            (*url_class.field_importance, *url_class.required_fields, *url_class.quorum_fields)
+        )
+    )
+    extraction_fields = list(
+        dict.fromkeys(
+            (*declared, *case.expect_values, *((case.records_field,) if case.records_field else ()))
+        )
+    )
 
-    if triage.verdict is Verdict.OK and declared:
+    if triage.verdict is Verdict.OK and extraction_fields:
         result, _ = extract_response(
             fixture.body,
             headers=fixture.headers,
             extractors=list(url_class.extractors),
-            fields=list(declared),
+            fields=extraction_fields,
             base_url=fixture.url or case.url or None,
         )
-        fields_found = {name: bool(result.data.get(name)) for name in declared}
+        fields_found = {name: _is_present(result.data.get(name)) for name in declared}
+        records = _extracted_record_count(
+            result.data, case.records_field, case.record_identity_field
+        )
+        extracted_data = result.data
         if url_class.quorum_fields:
             quorum = run_quorum(
                 fixture.body,
@@ -120,9 +163,31 @@ def run_case(
             comparisons = len(url_class.quorum_fields)
             conflicts = tuple(quorum.conflicts)
 
+    wrong_values = [
+        name
+        for name, expected in case.expect_values.items()
+        if name not in extracted_data
+        or json.dumps(extracted_data[name], sort_keys=True) != json.dumps(expected, sort_keys=True)
+    ]
     expected_present = all(fields_found.get(name, False) for name in case.expect_fields)
     expected_absent = all(not fields_found.get(name, False) for name in case.expect_absent_fields)
-    passed = verdict_matches and expected_present and expected_absent
+    enough_records = case.expect_min_records is None or (
+        records is not None and records >= case.expect_min_records
+    )
+    critical = (
+        set(url_class.critical_fields)
+        | set(url_class.required_fields)
+        | set(url_class.quorum_fields)
+    )
+    critical_conflicts = sorted(critical.intersection(conflicts))
+    passed = (
+        verdict_matches
+        and expected_present
+        and expected_absent
+        and enough_records
+        and not critical_conflicts
+        and not wrong_values
+    )
 
     detail = ""
     if not verdict_matches:
@@ -135,6 +200,12 @@ def run_case(
     elif not expected_absent:
         present = [f for f in case.expect_absent_fields if fields_found.get(f, False)]
         detail = f"field(s) that should have been absent: {', '.join(present)}"
+    elif not enough_records:
+        detail = f"expected at least {case.expect_min_records} distinct record(s), extracted {records if records is not None else 'unknown'}"
+    elif critical_conflicts:
+        detail = f"conflicting critical field(s): {', '.join(critical_conflicts)}"
+    elif wrong_values:
+        detail = f"unexpected value for field(s): {', '.join(wrong_values)}"
 
     return CaseOutcome(
         case_id=case.id,
@@ -145,6 +216,7 @@ def run_case(
         fields_found=fields_found,
         conflicts=conflicts,
         quorum_comparisons=comparisons,
+        records=records,
         detail=detail,
     )
 
@@ -245,7 +317,7 @@ def evaluate_mutation(
         extractors=list(url_class.extractors),
         fields=list(declared),
     )
-    missing = {name for name in declared if not result.data.get(name)}
+    missing = {name for name in declared if not _is_present(result.data.get(name))}
     if not missing:
         return Expectation.SURVIVES
     if any(url_class.field_importance[name].value == "critical" for name in missing):

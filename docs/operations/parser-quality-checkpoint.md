@@ -44,3 +44,8 @@ from other worktrees.
 T14–T18, budget and acquisition safeguards, versioned publication, projection
 consistency, broader source coverage, package release/integration, shadow
 comparison, and staged production rollout remain open under the full plan.
+# Next quality checkpoint
+
+Version 0.10.2 adds the required-field, quorum-conflict and record-acceptance
+contracts described in [the release runbook](parser-quality-release.md).
+The earlier checkpoint below remains a historical verification record.

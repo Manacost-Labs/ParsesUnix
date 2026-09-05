@@ -375,6 +375,7 @@ def run_quorum(
 
     # Collect, per field, the value each extractor produced.
     per_field: dict[str, list[tuple[str, Any]]] = {f: [] for f in quorum_fields}
+    seen_observations: dict[str, set[str]] = {f: set() for f in quorum_fields}
     all_values: dict[str, Any] = {}
     sources: dict[str, str] = {}
     for spec in extractors:
@@ -392,6 +393,22 @@ def run_quorum(
         )
         for f, value in produced.items():
             if value is not None and value != "":
+                # Repeating the same extractor declaration is not independent
+                # evidence.  Only the field-specific extraction address counts:
+                # incidental spec metadata must not manufacture a quorum.
+                identity = json.dumps(
+                    {
+                        "kind": extractor_kind,
+                        "field": f,
+                        "address": _observation_address(spec, extractor_kind, f),
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=repr,
+                )
+                if identity in seen_observations.setdefault(f, set()):
+                    continue
+                seen_observations[f].add(identity)
                 per_field.setdefault(f, []).append((extractor_kind, value))
 
     quorum: dict[str, str] = {}
@@ -421,3 +438,15 @@ def run_quorum(
     return ExtractionResult(
         data=all_values, sources=sources, quorum=quorum, conflicts=tuple(conflicts)
     )
+
+
+def _observation_address(spec: Mapping[str, Any], kind: str, field: str) -> Any:
+    """The portion of an extractor declaration that independently observes a field."""
+
+    if kind in {"json", "app_state", "css", "xpath", "meta"}:
+        fields = spec.get("fields")
+        return fields.get(field) if isinstance(fields, Mapping) else None
+    if kind == "json_ld":
+        return spec.get("schema_type")
+    # Heuristics have one fixed observation for each field they support.
+    return kind
